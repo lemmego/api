@@ -1,6 +1,6 @@
 package {{.PackageName}}
 
-import "github.com/lemmego/lemmego/api/app"
+import "github.com/lemmego/api/app"
 
 func {{.Name | toCamel}}IndexHandler(ctx *app.Context) error {
   return nil
