@@ -70,6 +70,11 @@ func (f *VField) Value() interface{} {
 	return f.value
 }
 
+func (f *VField) SetValue(value interface{}) *VField {
+	f.value = value
+	return f
+}
+
 func (f *VField) Name() string {
 	return f.name
 }
