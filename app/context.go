@@ -114,7 +114,7 @@ func (c *Context) ParseInput(inputStruct any) error {
 
 	nameField := v.FieldByName("BaseInput")
 	if nameField.IsValid() && nameField.CanSet() {
-		i := &BaseInput{App: c.app, Validator: NewValidator(c.app)}
+		i := &BaseInput{App: c.app, Ctx: c, Validator: NewValidator(c.app)}
 		nameField.Set(reflect.ValueOf(i))
 	}
 	return nil
