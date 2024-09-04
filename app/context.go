@@ -436,7 +436,7 @@ func (c *Context) HasFile(key string) bool {
 	return err == nil
 }
 
-func (c *Context) Upload(key string, dir string) (*os.File, error) {
+func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, error) {
 	if c.HasFile(key) {
 		file, header, err := c.FormFile(key)
 
@@ -450,6 +450,10 @@ func (c *Context) Upload(key string, dir string) (*os.File, error) {
 				logger.V().Info("Form file could not be closed", "Error:", err)
 			}
 		}()
+
+		if len(filename) > 0 {
+			header.Filename = filename[0]
+		}
 
 		return c.FS().Upload(file, header, dir)
 	}
