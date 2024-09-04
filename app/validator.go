@@ -525,9 +525,17 @@ func (f *VField) HexColor() *VField {
 	return f
 }
 
-func (f *VField) Unique(table string, column string) *VField {
+func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
-	f.vee.DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value).Count(&count)
+	query := f.vee.DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
+
+	if len(whereClauses) > 0 {
+		for key, value := range whereClauses[0] {
+			query = query.Where(key, value)
+		}
+	}
+
+	query.Count(&count)
 
 	if count > 0 {
 		f.vee.AddError(f.name, "This field must be unique")
