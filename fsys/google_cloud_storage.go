@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 )
 
 // GCSStorage is an implementation of StorageInterface for Google Cloud Storage.
@@ -20,9 +21,9 @@ type GCSStorage struct {
 	Client *storage.Client
 }
 
-func NewGCSStorage(projectID, bucket string) (*GCSStorage, error) {
+func NewGCSStorage(projectID, bucket, serviceAccountKey string) (*GCSStorage, error) {
 	ctx := context.Background()
-	client, err := storage.NewClient(ctx)
+	client, err := storage.NewClient(ctx, option.WithCredentialsFile(serviceAccountKey))
 	if err != nil {
 		return nil, err
 	}
@@ -105,9 +106,48 @@ func (gcs *GCSStorage) GetUrl(path string) (string, error) {
 }
 
 func (gcs *GCSStorage) Open(path string) (*os.File, error) {
-	panic("not implemented yet")
+	ctx := context.Background()
+	rc, err := gcs.Client.Bucket(gcs.BucketName).Object(path).NewReader(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+
+	tempFile, err := os.CreateTemp("", "gcs_temp_*")
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = io.Copy(tempFile, rc)
+	if err != nil {
+		tempFile.Close()
+		return nil, err
+	}
+
+	// Rewind the file pointer to the beginning of the file
+	_, err = tempFile.Seek(0, 0)
+	if err != nil {
+		tempFile.Close()
+		return nil, err
+	}
+
+	return tempFile, nil
 }
 
 func (gcs *GCSStorage) Upload(file multipart.File, header *multipart.FileHeader, dir string) (*os.File, error) {
-	panic("not implemented")
+	ctx := context.Background()
+	objectPath := fmt.Sprintf("%s/%s", dir, header.Filename)
+	wc := gcs.Client.Bucket(gcs.BucketName).Object(objectPath).NewWriter(ctx)
+
+	_, err := io.Copy(wc, file)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := wc.Close(); err != nil {
+		return nil, err
+	}
+
+	// Optionally return the opened file after uploading
+	return gcs.Open(objectPath)
 }

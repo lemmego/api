@@ -6,9 +6,11 @@ import (
 	"io"
 	"mime/multipart"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 )
@@ -25,25 +27,21 @@ type S3Storage struct {
 	S3Client *s3.S3
 }
 
-func NewS3Storage(region string, bucket string) *S3Storage {
+func NewS3Storage(bucket, region, accessKey, secretKey string, baseEndpoint string) (*S3Storage, error) {
 	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(region),
-		// Add any other necessary configuration options here
+		Endpoint:    aws.String(baseEndpoint),
+		Region:      aws.String(region),
+		Credentials: credentials.NewStaticCredentials(accessKey, secretKey, ""),
 	})
 
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	// Create S3 client
-	s3Client := s3.New(sess)
-
-	// Initialize S3 storage
 	return &S3Storage{
 		BucketName: bucket,
-		Session:    sess,
-		S3Client:   s3Client,
-	}
+		S3Client:   s3.New(sess),
+	}, nil
 }
 
 func (s3s *S3Storage) Read(path string) (io.ReadCloser, error) {
@@ -176,13 +174,58 @@ func (s3s *S3Storage) CreateDirectory(path string) error {
 // GetUrl returns the URL of the file at the specified path in S3 storage.
 func (s3s *S3Storage) GetUrl(path string) (string, error) {
 	// Format the URL based on the bucket name and object key
-	return fmt.Sprintf("https://%s.s3.amazonaws.com/%s", s3s.BucketName, path), nil
+	if exists, err := s3s.Exists(path); err != nil || !exists {
+		return "", fmt.Errorf("file not found: %s", path)
+	}
+	req, _ := s3s.S3Client.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: aws.String(s3s.BucketName),
+		Key:    aws.String(path),
+	})
+	urlStr, err := req.Presign(15 * time.Minute)
+	return urlStr, err
 }
 
 func (s3s *S3Storage) Open(path string) (*os.File, error) {
-	panic("not implemented")
+	output, err := s3s.S3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s3s.BucketName),
+		Key:    aws.String(path),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer output.Body.Close()
+
+	tempFile, err := os.CreateTemp("", "s3_temp_*")
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = io.Copy(tempFile, output.Body)
+	if err != nil {
+		tempFile.Close()
+		return nil, err
+	}
+
+	_, err = tempFile.Seek(0, 0)
+	if err != nil {
+		tempFile.Close()
+		return nil, err
+	}
+
+	return tempFile, nil
 }
 
 func (s3s *S3Storage) Upload(file multipart.File, header *multipart.FileHeader, dir string) (*os.File, error) {
-	panic("not implemented")
+	objectPath := fmt.Sprintf("%s/%s", dir, header.Filename)
+	_, err := s3s.S3Client.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s3s.BucketName),
+		Key:    aws.String(objectPath),
+		Body:   file,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Optionally return the opened file after uploading
+	return s3s.Open(objectPath)
 }
