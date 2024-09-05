@@ -15,12 +15,11 @@ import (
 type ConfigMap map[string]interface{}
 
 var (
-	Conf ConfigMap
+	Conf ConfigMap = make(ConfigMap)
 	mu   sync.RWMutex
 )
 
 func init() {
-	Conf = make(ConfigMap)
 	if err := godotenv.Load(); err != nil {
 		panic(err)
 	}
@@ -59,43 +58,50 @@ func Get[T any](key string, fallback ...T) T {
 	defer mu.RUnlock()
 
 	keys := strings.Split(key, ".")
-	current := Conf
+	current := interface{}(Conf)
 
 	for _, k := range keys {
-		if val, exists := current[k]; exists {
-			// Try to type assert the value to the expected type
-			if typedVal, ok := val.(T); ok {
-				return typedVal
-			}
-			// Handle nested maps as ConfigMap
-			if m, ok := val.(ConfigMap); ok {
-				current = m
+		if m, ok := current.(ConfigMap); ok {
+			if val, exists := m[k]; exists {
+				current = val
 			} else {
-				break // Exit the loop if we can't type assert
+				return getFallbackOrZero(fallback)
 			}
 		} else {
-			// Return fallback if provided
-			if len(fallback) > 0 {
-				return fallback[0]
+			return getFallbackOrZero(fallback)
+		}
+	}
+
+	// Try to convert the final value to type T
+	if result, ok := current.(T); ok {
+		return result
+	}
+
+	// Handle the case where T is map[string]any
+	if reflect.TypeOf(*(new(T))) == reflect.TypeOf(map[string]any{}) {
+		if m, ok := current.(ConfigMap); ok {
+			result := make(map[string]any)
+			for k, v := range m {
+				result[k] = v
 			}
-			// Zero value of T if no fallback
-			var zero T
-			return zero
+			return any(result).(T)
 		}
 	}
 
-	// If the key points to a map, return the map if it matches T
-	if len(keys) == 1 {
-		if typedVal, ok := current[keys[0]].(T); ok {
-			return typedVal
+	// If T is ConfigMap and current is map[string]interface{}, convert it
+	if _, ok := interface{}(*(new(T))).(ConfigMap); ok {
+		if m, ok := current.(map[string]interface{}); ok {
+			return interface{}(ConfigMap(m)).(T)
 		}
 	}
 
-	// Return fallback if nothing was found
+	return getFallbackOrZero(fallback)
+}
+
+func getFallbackOrZero[T any](fallback []T) T {
 	if len(fallback) > 0 {
 		return fallback[0]
 	}
-
 	var zero T
 	return zero
 }
