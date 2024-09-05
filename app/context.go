@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -459,6 +460,29 @@ func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, 
 	}
 
 	return nil, nil
+}
+
+func (c *Context) Download(path string, filename string) error {
+	if exists, err := c.FS().Exists(path); err != nil || !exists {
+		return fmt.Errorf("file not found: %s", path)
+	}
+
+	file, err := c.FS().Open(path)
+	defer func() {
+		err := file.Close()
+		if err != nil {
+			logger.V().Info("File could not be closed", "Error:", err)
+		}
+	}()
+
+	if err != nil {
+		return fmt.Errorf("could not open file: %w", err)
+	}
+
+	c.writer.Header().Set("content-type", "application/octet-stream")
+	c.writer.Header().Set("content-disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	_, err = io.Copy(c.writer, file)
+	return err
 }
 
 func (c *Context) Set(key string, value interface{}) {
