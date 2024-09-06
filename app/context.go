@@ -462,9 +462,42 @@ func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, 
 	return nil, nil
 }
 
-func (c *Context) Download(path string, filename string) error {
+func (c *Context) File(path string, headers ...map[string][]string) error {
+	// Check if the file exists using os package
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
+	}
+
+	file, err := os.Open(path)
+	defer func() {
+		err := file.Close()
+		if err != nil {
+			logger.V().Info("File could not be closed", "Error:", err)
+		}
+	}()
+
+	if err != nil {
+		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
+	}
+
+	if len(headers) > 0 {
+		for key, values := range headers[0] {
+			for _, value := range values {
+				c.writer.Header().Add(key, value)
+			}
+		}
+	}
+
+	if c.writer.Header().Get("content-type") == "" {
+		c.writer.Header().Set("content-type", "application/octet-stream")
+	}
+	_, err = io.Copy(c.writer, file)
+	return err
+}
+
+func (c *Context) StorageFile(path string, headers ...map[string][]string) error {
 	if exists, err := c.FS().Exists(path); err != nil || !exists {
-		return fmt.Errorf("file not found: %s", path)
+		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
 	}
 
 	file, err := c.FS().Open(path)
@@ -476,7 +509,39 @@ func (c *Context) Download(path string, filename string) error {
 	}()
 
 	if err != nil {
-		return fmt.Errorf("could not open file: %w", err)
+		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
+	}
+
+	if len(headers) > 0 {
+		for key, values := range headers[0] {
+			for _, value := range values {
+				c.writer.Header().Add(key, value)
+			}
+		}
+	}
+
+	if c.writer.Header().Get("content-type") == "" {
+		c.writer.Header().Set("content-type", "application/octet-stream")
+	}
+	_, err = io.Copy(c.writer, file)
+	return err
+}
+
+func (c *Context) Download(path string, filename string) error {
+	if exists, err := c.FS().Exists(path); err != nil || !exists {
+		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
+	}
+
+	file, err := c.FS().Open(path)
+	defer func() {
+		err := file.Close()
+		if err != nil {
+			logger.V().Info("File could not be closed", "Error:", err)
+		}
+	}()
+
+	if err != nil {
+		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
 	}
 
 	c.writer.Header().Set("content-type", "application/octet-stream")
