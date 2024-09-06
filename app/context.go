@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -479,8 +481,8 @@ func (c *Context) File(path string, headers ...map[string][]string) error {
 		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
 	}
 
-	c.writer.Header().Set("content-type", "application/octet-stream")
-	c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", file.Name()))
+	c.writer.Header().Set("content-type", mime.TypeByExtension(filepath.Ext(file.Name())))
+	c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", filepath.Base(path)))
 
 	if len(headers) > 0 {
 		for key, values := range headers[0] {
@@ -510,8 +512,8 @@ func (c *Context) StorageFile(path string, headers ...map[string][]string) error
 		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
 	}
 
-	c.writer.Header().Set("content-type", "application/octet-stream")
-	c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", file.Name()))
+	c.writer.Header().Set("content-type", mime.TypeByExtension(filepath.Ext(file.Name())))
+	c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", filepath.Base(path)))
 
 	if len(headers) > 0 {
 		for key, values := range headers[0] {
