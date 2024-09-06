@@ -463,7 +463,6 @@ func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, 
 }
 
 func (c *Context) File(path string, headers ...map[string][]string) error {
-	// Check if the file exists using os package
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
 	}
@@ -490,6 +489,10 @@ func (c *Context) File(path string, headers ...map[string][]string) error {
 
 	if c.writer.Header().Get("content-type") == "" {
 		c.writer.Header().Set("content-type", "application/octet-stream")
+	}
+
+	if c.writer.Header().Get("content-disposition") == "" {
+		c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", file.Name()))
 	}
 	_, err = io.Copy(c.writer, file)
 	return err
@@ -523,6 +526,11 @@ func (c *Context) StorageFile(path string, headers ...map[string][]string) error
 	if c.writer.Header().Get("content-type") == "" {
 		c.writer.Header().Set("content-type", "application/octet-stream")
 	}
+
+	if c.writer.Header().Get("content-disposition") == "" {
+		c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", file.Name()))
+	}
+
 	_, err = io.Copy(c.writer, file)
 	return err
 }
