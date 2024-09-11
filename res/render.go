@@ -1,12 +1,16 @@
 package res
 
 import (
+	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"path/filepath"
 
 	"github.com/lemmego/api/shared"
 )
+
+var templateCache map[string]*template.Template
 
 type AlertMessage struct {
 	Type string // success, error, warning, info, debug
@@ -25,70 +29,58 @@ type TemplateData struct {
 	Messages         []*AlertMessage
 }
 
-func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) error {
-	// create a template cache
-	tc, err := createTemplateCache(data)
+func init() {
+	// Initialize template cache once during startup
+	var err error
+	templateCache, err = createTemplateCache()
 	if err != nil {
-		return err
+		log.Fatalf("failed to create template cache: %v", err)
 	}
-
-	// get requested template from the cache
-	t, ok := tc[tmpl]
-	if !ok {
-		// log the error
-	}
-
-	// render the template
-	err = t.Execute(w, data)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
-func createTemplateCache(data *TemplateData) (map[string]*template.Template, error) {
-	// create a map to act as a cache
+func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) error {
+	t, ok := templateCache[tmpl]
+	if !ok {
+		return fmt.Errorf("template %s not found in cache", tmpl)
+	}
+
+	// Apply FuncMap here
+	if data.FuncMap != nil {
+		t = t.Funcs(data.FuncMap)
+	}
+
+	return t.Execute(w, data)
+}
+
+func createTemplateCache() (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}
 
-	// get all page files in the templates directory
 	pages, err := filepath.Glob("./templates/*.page.tmpl")
 	if err != nil {
-		return myCache, err
+		return myCache, fmt.Errorf("error finding page templates: %v", err)
 	}
 
-	// get all partial files in the templates directory
 	partials, err := filepath.Glob("./templates/*.partial.tmpl")
 	if err != nil {
-		return myCache, err
+		return myCache, fmt.Errorf("error finding partial templates: %v", err)
 	}
 
-	pages = append(pages, partials...)
-
-	// loop through the pages one-by-one
-	for _, page := range pages {
-		// extract the file name (like about.page.tmpl)
+	for _, page := range append(pages, partials...) {
 		name := filepath.Base(page)
+		ts := template.New(name)
 
-		// parse the page template file in to a template set
-		ts, err := template.ParseFiles(page)
-		if data.FuncMap != nil {
-			ts.Funcs(data.FuncMap)
-		}
+		ts, err := ts.ParseFiles(page)
 		if err != nil {
-			return myCache, err
+			return myCache, fmt.Errorf("error parsing page template %s: %v", name, err)
 		}
 
-		// parse the layout template file in to a template set
 		ts, err = ts.ParseGlob("./templates/*.layout.tmpl")
 		if err != nil {
-			return myCache, err
+			return myCache, fmt.Errorf("error parsing layout templates for %s: %v", name, err)
 		}
 
-		// add the template set to the cache, using the name of the page as the key
 		myCache[name] = ts
 	}
 
-	// return the map
 	return myCache, nil
 }
