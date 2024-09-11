@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/lemmego/api/shared"
@@ -55,17 +56,31 @@ func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) erro
 func createTemplateCache() (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}
 
-	pages, err := filepath.Glob("./templates/*.page.tmpl")
+	// Collect all page, partial, and layout template files
+	var allTemplates []string
+	err := filepath.Walk("./templates", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && (filepath.Ext(path) == ".tmpl") {
+			allTemplates = append(allTemplates, path)
+		}
+		return nil
+	})
 	if err != nil {
-		return myCache, fmt.Errorf("error finding page templates: %v", err)
+		return myCache, fmt.Errorf("error walking template directory: %v", err)
 	}
 
-	partials, err := filepath.Glob("./templates/*.partial.tmpl")
-	if err != nil {
-		return myCache, fmt.Errorf("error finding partial templates: %v", err)
+	// Separate page and partial templates from layout templates
+	var pageTemplates []string
+	for _, tmpl := range allTemplates {
+		if filepath.Ext(tmpl) == ".page.tmpl" || filepath.Ext(tmpl) == ".partial.tmpl" {
+			pageTemplates = append(pageTemplates, tmpl)
+		}
 	}
 
-	for _, page := range append(pages, partials...) {
+	// Loop through the page templates
+	for _, page := range pageTemplates {
 		name := filepath.Base(page)
 		ts := template.New(name)
 
@@ -74,7 +89,8 @@ func createTemplateCache() (map[string]*template.Template, error) {
 			return myCache, fmt.Errorf("error parsing page template %s: %v", name, err)
 		}
 
-		ts, err = ts.ParseGlob("./templates/*.layout.tmpl")
+		// Parse all layout templates
+		ts, err = ts.ParseGlob("./templates/**/*.layout.tmpl")
 		if err != nil {
 			return myCache, fmt.Errorf("error parsing layout templates for %s: %v", name, err)
 		}
