@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lemmego/api/shared"
 )
@@ -56,36 +57,33 @@ func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) erro
 func createTemplateCache() (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}
 
-	// Find all layout templates
+	// Find all layout templates (glob pattern for nested directories)
 	layouts, err := filepath.Glob("./templates/**/*.layout.tmpl")
 	if err != nil {
 		return myCache, fmt.Errorf("error finding layout templates: %v", err)
 	}
 
-	// Collect all page and partial template files
+	// Walk through the template directory to find all .page.tmpl files
 	err = filepath.Walk("./templates", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip directories, only process files with .tmpl extension
-		if !info.IsDir() && (filepath.Ext(path) == ".tmpl") {
-			// Extract the relative path (from ./templates)
-			relPath, err := filepath.Rel("./templates", path)
+		// Skip directories, only process .tmpl files
+		if !info.IsDir() && filepath.Ext(path) == ".tmpl" && strings.HasSuffix(path, ".page.tmpl") {
+			relPath, err := filepath.Rel("./templates", path) // Get relative path from ./templates
 			if err != nil {
 				return err
 			}
 
-			// Create a new template set and parse the template file
+			// Create a new template set and parse the page template
 			ts := template.New(filepath.Base(path))
-
-			// Parse the current template file (e.g., page or partial)
 			ts, err = ts.ParseFiles(path)
 			if err != nil {
 				return fmt.Errorf("error parsing template %s: %v", relPath, err)
 			}
 
-			// Parse all layout templates (ensure layouts are included in the template set)
+			// Parse all found layout templates into the same template set
 			if len(layouts) > 0 {
 				ts, err = ts.ParseFiles(layouts...)
 				if err != nil {
@@ -93,7 +91,7 @@ func createTemplateCache() (map[string]*template.Template, error) {
 				}
 			}
 
-			// Store the template in the cache, using the relative path as the key
+			// Cache the template using the relative path (e.g., "foo/bar.page.tmpl")
 			myCache[relPath] = ts
 		}
 
