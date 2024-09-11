@@ -56,8 +56,14 @@ func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) erro
 func createTemplateCache() (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}
 
-	// Collect all page, partial, and layout template files
-	err := filepath.Walk("./templates", func(path string, info os.FileInfo, err error) error {
+	// Find all layout templates
+	layouts, err := filepath.Glob("./templates/**/*.layout.tmpl")
+	if err != nil {
+		return myCache, fmt.Errorf("error finding layout templates: %v", err)
+	}
+
+	// Collect all page and partial template files
+	err = filepath.Walk("./templates", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -78,10 +84,12 @@ func createTemplateCache() (map[string]*template.Template, error) {
 				return fmt.Errorf("error parsing template %s: %v", relPath, err)
 			}
 
-			// Parse all layout templates
-			ts, err = ts.ParseGlob("./templates/**/*.layout.tmpl")
-			if err != nil {
-				return fmt.Errorf("error parsing layout templates for %s: %v", relPath, err)
+			// Only parse layout templates if there are any
+			if len(layouts) > 0 {
+				ts, err = ts.ParseGlob("./templates/**/*.layout.tmpl")
+				if err != nil {
+					return fmt.Errorf("error parsing layout templates for %s: %v", relPath, err)
+				}
 			}
 
 			// Store the template in the cache, using the relative path as the key
