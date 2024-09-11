@@ -57,45 +57,42 @@ func createTemplateCache() (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}
 
 	// Collect all page, partial, and layout template files
-	var allTemplates []string
 	err := filepath.Walk("./templates", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
+		// Skip directories, only process files with .tmpl extension
 		if !info.IsDir() && (filepath.Ext(path) == ".tmpl") {
-			allTemplates = append(allTemplates, path)
+			// Extract the relative path (from ./templates)
+			relPath, err := filepath.Rel("./templates", path)
+			if err != nil {
+				return err
+			}
+
+			// Create a new template set and parse the template file
+			ts := template.New(filepath.Base(path))
+
+			ts, err = ts.ParseFiles(path)
+			if err != nil {
+				return fmt.Errorf("error parsing template %s: %v", relPath, err)
+			}
+
+			// Parse all layout templates
+			ts, err = ts.ParseGlob("./templates/**/*.layout.tmpl")
+			if err != nil {
+				return fmt.Errorf("error parsing layout templates for %s: %v", relPath, err)
+			}
+
+			// Store the template in the cache, using the relative path as the key
+			myCache[relPath] = ts
 		}
+
 		return nil
 	})
+
 	if err != nil {
 		return myCache, fmt.Errorf("error walking template directory: %v", err)
-	}
-
-	// Separate page and partial templates from layout templates
-	var pageTemplates []string
-	for _, tmpl := range allTemplates {
-		if filepath.Ext(tmpl) == ".page.tmpl" || filepath.Ext(tmpl) == ".partial.tmpl" {
-			pageTemplates = append(pageTemplates, tmpl)
-		}
-	}
-
-	// Loop through the page templates
-	for _, page := range pageTemplates {
-		name := filepath.Base(page)
-		ts := template.New(name)
-
-		ts, err := ts.ParseFiles(page)
-		if err != nil {
-			return myCache, fmt.Errorf("error parsing page template %s: %v", name, err)
-		}
-
-		// Parse all layout templates
-		ts, err = ts.ParseGlob("./templates/**/*.layout.tmpl")
-		if err != nil {
-			return myCache, fmt.Errorf("error parsing layout templates for %s: %v", name, err)
-		}
-
-		myCache[name] = ts
 	}
 
 	return myCache, nil
