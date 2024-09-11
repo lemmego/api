@@ -211,7 +211,9 @@ func (c *Context) I() *inertia.Inertia {
 	return c.app.Inertia()
 }
 
-func (c *Context) Templ(component templ.Component) error {
+func (c *Context) Templ(status int, component templ.Component) error {
+	c.writer.Header().Set("content-type", "text/html")
+	c.writer.WriteHeader(status)
 	return component.Render(c.Request().Context(), c.writer)
 }
 
