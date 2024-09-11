@@ -79,14 +79,15 @@ func createTemplateCache() (map[string]*template.Template, error) {
 			// Create a new template set and parse the template file
 			ts := template.New(filepath.Base(path))
 
+			// Parse the current template file (e.g., page or partial)
 			ts, err = ts.ParseFiles(path)
 			if err != nil {
 				return fmt.Errorf("error parsing template %s: %v", relPath, err)
 			}
 
-			// Only parse layout templates if there are any
+			// Parse all layout templates (ensure layouts are included in the template set)
 			if len(layouts) > 0 {
-				ts, err = ts.ParseGlob("./templates/**/*.layout.tmpl")
+				ts, err = ts.ParseFiles(layouts...)
 				if err != nil {
 					return fmt.Errorf("error parsing layout templates for %s: %v", relPath, err)
 				}
