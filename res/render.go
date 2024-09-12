@@ -5,7 +5,9 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lemmego/api/shared"
 )
@@ -30,7 +32,6 @@ type TemplateData struct {
 }
 
 func init() {
-	// Initialize template cache once during startup
 	var err error
 	templateCache, err = createTemplateCache()
 	if err != nil {
@@ -38,48 +39,85 @@ func init() {
 	}
 }
 
+func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) error {
+	t, ok := templateCache[tmpl]
+	if !ok {
+		return fmt.Errorf("template %s not found in cache", tmpl)
+	}
+	if data.FuncMap != nil {
+		t = t.Funcs(data.FuncMap)
+	}
+	return t.Execute(w, data)
+}
+
 func createTemplateCache() (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}
 
-	// Find all .tmpl files (including in nested directories)
-	templates, err := filepath.Glob("./templates/**/*.tmpl")
-	if err != nil {
-		return myCache, fmt.Errorf("error finding templates: %v", err)
-	}
-
-	// Loop through all the template files
-	for _, tmpl := range templates {
-		// Extract the file name (e.g., bar.tmpl)
-		name := filepath.Base(tmpl)
-
-		// Create a new template set for each file
-		ts := template.New(name)
-
-		// Parse all templates into the same template set (including the current template)
-		ts, err = ts.ParseFiles(templates...)
+	err := filepath.Walk("./templates", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return myCache, fmt.Errorf("error parsing templates for %s: %v", tmpl, err)
+			return err
 		}
 
-		// Store the parsed template set in the cache, using the relative path of the template
-		myCache[tmpl] = ts
+		if info.IsDir() {
+			return nil
+		}
+
+		if !strings.HasSuffix(path, ".page.tmpl") {
+			return nil
+		}
+
+		name, err := filepath.Rel("./templates", path)
+		if err != nil {
+			return fmt.Errorf("error getting relative path: %v", err)
+		}
+
+		ts, err := template.New(filepath.Base(path)).ParseFiles(path)
+		if err != nil {
+			return fmt.Errorf("error parsing page template %s: %v", name, err)
+		}
+
+		// Find and parse layout templates
+		layouts, err := findTemplates(filepath.Dir(path), "*.layout.tmpl")
+		if err != nil {
+			return fmt.Errorf("error finding layout templates for %s: %v", name, err)
+		}
+
+		// Find and parse partial templates
+		partials, err := findTemplates(filepath.Dir(path), "*.partial.tmpl")
+		if err != nil {
+			return fmt.Errorf("error finding partial templates for %s: %v", name, err)
+		}
+
+		// Combine layouts and partials
+		templatestoAdd := append(layouts, partials...)
+
+		if len(templatestoAdd) > 0 {
+			ts, err = ts.ParseFiles(templatestoAdd...)
+			if err != nil {
+				return fmt.Errorf("error parsing additional templates for %s: %v", name, err)
+			}
+		}
+
+		myCache[name] = ts
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error walking templates directory: %v", err)
 	}
 
 	return myCache, nil
 }
 
-func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) error {
-	// Look up the requested template from the cache
-	t, ok := templateCache[tmpl]
-	if !ok {
-		return fmt.Errorf("template %s not found in cache", tmpl)
+func findTemplates(dir, pattern string) ([]string, error) {
+	var templates []string
+	for dir != "." && dir != "/" {
+		files, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return nil, fmt.Errorf("error searching for templates in %s: %v", dir, err)
+		}
+		templates = append(templates, files...)
+		dir = filepath.Dir(dir)
 	}
-
-	// Apply the FuncMap if provided
-	if data.FuncMap != nil {
-		t = t.Funcs(data.FuncMap)
-	}
-
-	// Execute the template with the provided data
-	return t.Execute(w, data)
+	return templates, nil
 }
