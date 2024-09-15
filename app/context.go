@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -80,6 +81,15 @@ func (c *Context) SetCookie(name string, value string, maxAge int, path string, 
 		HttpOnly: httpOnly,
 	}
 	http.SetCookie(c.writer, cookie)
+}
+
+func (c *Context) Cookie(name string) *http.Cookie {
+	cookie, err := c.request.Cookie(name)
+	if err != nil {
+		return nil
+	}
+
+	return cookie
 }
 
 func (c *Context) Alert(typ string, message string) *res.AlertMessage {
@@ -229,6 +239,10 @@ func (c *Context) WantsJSON() bool {
 	return req.WantsJSON(c.request)
 }
 
+func (c *Context) WantsHTML() bool {
+	return req.WantsHTML(c.request)
+}
+
 func (c *Context) JSON(status int, body M) error {
 	// TODO: Check if header is already sent
 	response, _ := json.Marshal(body)
@@ -283,6 +297,12 @@ func (c *Context) Render(status int, tmplPath string, data *res.TemplateData) er
 	data = c.resolveTemplateData(data)
 	c.writer.Header().Set("content-type", "text/html")
 	c.writer.WriteHeader(status)
+	data.FuncMap = template.FuncMap{
+		"csrf": func() template.HTML {
+			token := c.GetSessionString("_token")
+			return template.HTML(`<input type="hidden" name="_token" value="` + token + `" />`)
+		},
+	}
 	return res.RenderTemplate(c.writer, tmplPath, data)
 }
 
@@ -297,14 +317,6 @@ func (c *Context) Inertia(status int, filePath string, props map[string]any) err
 		}
 
 		props["errors"] = errs
-	}
-
-	if input := c.PopSession("input"); input != nil {
-		if props == nil {
-			props = map[string]any{}
-		}
-
-		props["input"] = input
 	}
 
 	c.writer.WriteHeader(status)
@@ -383,6 +395,10 @@ func (c *Context) HasFormURLEncodedRequest() bool {
 
 func (c *Context) IsInertiaRequest() bool {
 	return inertia.IsInertiaRequest(c.request)
+}
+
+func (c *Context) IsReading() bool {
+	return c.request.Method == "GET" || c.request.Method == "HEAD" || c.request.Method == "OPTIONS"
 }
 
 func (c *Context) Param(key string) string {
@@ -635,6 +651,10 @@ func (c *Context) Unauthorized(err error) error {
 
 func (c *Context) Forbidden(err error) error {
 	return c.Error(http.StatusForbidden, err)
+}
+
+func (c *Context) PageExpired() error {
+	return c.Error(419, errors.New("page expired"))
 }
 
 func (c *Context) DecodeJSON(v interface{}) error {
