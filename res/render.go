@@ -26,7 +26,6 @@ type TemplateData struct {
 	BoolMap          map[string]bool
 	FuncMap          template.FuncMap
 	Data             map[string]any
-	CSRFToken        string
 	ValidationErrors shared.ValidationErrors
 	Messages         []*AlertMessage
 }
@@ -71,7 +70,7 @@ func createTemplateCache() (map[string]*template.Template, error) {
 			return fmt.Errorf("error getting relative path: %v", err)
 		}
 
-		ts, err := template.New(filepath.Base(path)).ParseFiles(path)
+		ts, err := template.New(filepath.Base(path)).Funcs(template.FuncMap{"csrf": func() template.HTML { return "" }}).ParseFiles(path)
 		if err != nil {
 			return fmt.Errorf("error parsing page template %s: %v", name, err)
 		}
