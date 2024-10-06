@@ -1,136 +1,182 @@
 package container
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sync"
 )
 
-// BindingType represents the type of binding
-type BindingType int
+// ScopeIDKey is the key used to store the scope ID in the context
+var ScopeIDKey = struct{}{}
 
-const (
-	// BindingTypeTransient represents a binding that's created each time it's resolved
-	BindingTypeTransient BindingType = iota
-	// BindingTypeSingleton represents a binding that's created only once
-	BindingTypeSingleton
-)
-
-// binding represents a container binding
-type binding struct {
-	concrete interface{}
-	bindType BindingType
-	instance interface{}
-}
-
-// Container represents the IoC container
 type Container struct {
-	bindings map[reflect.Type]*binding
-	mutex    sync.RWMutex
+	bindings   map[reflect.Type]bindingInfo
+	instances  map[reflect.Type]interface{}
+	scopes     map[string]map[reflect.Type]interface{}
+	scopeMutex sync.RWMutex
 }
 
-// New creates a new IoC container
-func New() *Container {
+type ServiceContainer interface {
+	Bind(abstract interface{}, concrete interface{})
+	Singleton(abstract interface{}, concrete interface{})
+	Scoped(abstract interface{}, concrete interface{})
+	Resolve(out interface{}) error
+	ResolveCtx(ctx context.Context, out interface{}) error
+	BeginScope(scopeID string)
+	EndScope(scopeID string)
+}
+
+type bindingInfo struct {
+	resolver  interface{}
+	singleton bool
+	scoped    bool
+}
+
+func NewContainer() *Container {
 	return &Container{
-		bindings: make(map[reflect.Type]*binding),
+		bindings:  make(map[reflect.Type]bindingInfo),
+		instances: make(map[reflect.Type]interface{}),
+		scopes:    make(map[string]map[reflect.Type]interface{}),
 	}
 }
 
-// Bind registers a transient binding with the container
 func (c *Container) Bind(abstract interface{}, concrete interface{}) {
-	c.bind(abstract, concrete, BindingTypeTransient)
+	c.bind(abstract, concrete, false, false)
 }
 
-// BindSingleton registers a singleton binding with the container
-func (c *Container) BindSingleton(abstract interface{}, concrete interface{}) {
-	c.bind(abstract, concrete, BindingTypeSingleton)
+func (c *Container) Singleton(abstract interface{}, concrete interface{}) {
+	c.bind(abstract, concrete, true, false)
 }
 
-// bind is a helper method to register a binding
-func (c *Container) bind(abstract interface{}, concrete interface{}, bindType BindingType) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+func (c *Container) Scoped(abstract interface{}, concrete interface{}) {
+	c.bind(abstract, concrete, false, true)
+}
 
-	abstractType := c.getAbstractType(abstract)
-	c.bindings[abstractType] = &binding{
-		concrete: concrete,
-		bindType: bindType,
+func (c *Container) Resolve(out interface{}) error {
+	return c.resolveInScope(out, "")
+}
+
+func (c *Container) ResolveCtx(ctx context.Context, out interface{}) error {
+	scopeID, _ := ctx.Value(ScopeIDKey).(string)
+	return c.resolveInScope(out, scopeID)
+}
+
+func (c *Container) bind(abstract interface{}, concrete interface{}, singleton, scoped bool) {
+	abstractType := reflect.TypeOf(abstract)
+	if abstractType.Kind() == reflect.Ptr {
+		abstractType = abstractType.Elem()
+	}
+	fmt.Printf("Binding: %v\n", abstractType) // Debug log
+	c.bindings[abstractType] = bindingInfo{
+		resolver:  concrete,
+		singleton: singleton,
+		scoped:    scoped,
 	}
 }
 
-// Resolve retrieves a binding from the container
-func (c *Container) Resolve(abstract interface{}) (interface{}, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+func (c *Container) resolveInScope(out interface{}, scopeID string) error {
+	outValue := reflect.ValueOf(out)
+	if outValue.Kind() != reflect.Ptr {
+		return fmt.Errorf("out parameter must be a pointer")
+	}
 
-	abstractType := c.getAbstractType(abstract)
+	abstractType := outValue.Type().Elem()
+	fmt.Printf("Resolving: %v\n", abstractType) // Debug log
 
 	binding, exists := c.bindings[abstractType]
 	if !exists {
-		return nil, fmt.Errorf("binding not found for type: %v", abstractType)
-	}
-
-	if binding.bindType == BindingTypeSingleton && binding.instance != nil {
-		return binding.instance, nil
-	}
-
-	instance, err := c.build(binding.concrete)
-	if err != nil {
-		return nil, err
-	}
-
-	if binding.bindType == BindingTypeSingleton {
-		binding.instance = instance
-	}
-
-	return instance, nil
-}
-
-// Clear clears all bindings in the container
-func (c *Container) Clear() {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	c.bindings = make(map[reflect.Type]*binding)
-}
-
-// getAbstractType returns the reflect.Type of the abstract parameter
-func (c *Container) getAbstractType(abstract interface{}) reflect.Type {
-	if t, ok := abstract.(reflect.Type); ok {
-		return t
-	}
-	return reflect.TypeOf(abstract)
-}
-
-// build creates an instance of the concrete type
-func (c *Container) build(concrete interface{}) (interface{}, error) {
-	t := reflect.TypeOf(concrete)
-
-	if t.Kind() == reflect.Func {
-		return c.buildFunc(concrete)
-	}
-
-	return concrete, nil
-}
-
-// buildFunc handles building instances from factory functions
-func (c *Container) buildFunc(concrete interface{}) (interface{}, error) {
-	t := reflect.TypeOf(concrete)
-	params := make([]reflect.Value, t.NumIn())
-
-	for i := 0; i < t.NumIn(); i++ {
-		param := t.In(i)
-		dependency, err := c.Resolve(param)
-		if err != nil {
-			return nil, fmt.Errorf("error resolving dependency: %v", err)
+		// If the abstractType is a pointer, try to find a binding for its element type
+		if abstractType.Kind() == reflect.Ptr {
+			binding, exists = c.bindings[abstractType.Elem()]
 		}
-		params[i] = reflect.ValueOf(dependency)
+
+		// If still not found and it's an interface, look for implementations
+		if !exists && abstractType.Kind() == reflect.Interface {
+			fmt.Printf("Direct binding not found, searching for implementations...\n") // Debug log
+			for boundType, boundBinding := range c.bindings {
+				fmt.Printf("Checking: %v\n", boundType) // Debug log
+				if boundType.Implements(abstractType) {
+					binding = boundBinding
+					exists = true
+					fmt.Printf("Found implementation: %v\n", boundType) // Debug log
+					break
+				}
+			}
+		}
 	}
 
-	results := reflect.ValueOf(concrete).Call(params)
-	if len(results) == 0 {
-		return nil, nil
+	if !exists {
+		return fmt.Errorf("no binding found for %v", abstractType)
 	}
 
-	return results[0].Interface(), nil
+	if binding.singleton {
+		if instance, ok := c.instances[abstractType]; ok {
+			outValue.Elem().Set(reflect.ValueOf(instance))
+			return nil
+		}
+	}
+
+	if binding.scoped {
+		c.scopeMutex.RLock()
+		scopedInstances, exists := c.scopes[scopeID]
+		if exists {
+			if instance, ok := scopedInstances[abstractType]; ok {
+				c.scopeMutex.RUnlock()
+				outValue.Elem().Set(reflect.ValueOf(instance))
+				return nil
+			}
+		}
+		c.scopeMutex.RUnlock()
+	}
+
+	var instance interface{}
+
+	concreteValue := reflect.ValueOf(binding.resolver)
+	if concreteValue.Kind() == reflect.Func {
+		results := concreteValue.Call(nil)
+		if len(results) != 1 {
+			return fmt.Errorf("factory function must return exactly one value")
+		}
+		instance = results[0].Interface()
+	} else if concreteValue.Kind() == reflect.Ptr {
+		instance = reflect.New(concreteValue.Type().Elem()).Interface()
+	} else {
+		return fmt.Errorf("invalid binding for %v", abstractType)
+	}
+
+	if binding.singleton {
+		c.instances[abstractType] = instance
+	} else if binding.scoped {
+		c.scopeMutex.Lock()
+		if _, exists := c.scopes[scopeID]; !exists {
+			c.scopes[scopeID] = make(map[reflect.Type]interface{})
+		}
+		c.scopes[scopeID][abstractType] = instance
+		c.scopeMutex.Unlock()
+	}
+
+	instanceValue := reflect.ValueOf(instance)
+	if abstractType.Kind() == reflect.Ptr && instanceValue.Kind() != reflect.Ptr {
+		// If we're expecting a pointer but instance is not a pointer, get its address
+		instancePtr := reflect.New(instanceValue.Type())
+		instancePtr.Elem().Set(instanceValue)
+		outValue.Elem().Set(instancePtr)
+	} else {
+		outValue.Elem().Set(instanceValue)
+	}
+
+	return nil
+}
+
+func (c *Container) BeginScope(scopeID string) {
+	c.scopeMutex.Lock()
+	defer c.scopeMutex.Unlock()
+	c.scopes[scopeID] = make(map[reflect.Type]interface{})
+}
+
+func (c *Container) EndScope(scopeID string) {
+	c.scopeMutex.Lock()
+	defer c.scopeMutex.Unlock()
+	delete(c.scopes, scopeID)
 }

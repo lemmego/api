@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"strconv"
 	"time"
@@ -57,7 +56,7 @@ func Resolve(ctx context.Context, resolver ResolverFunc) (*DB, error) {
 	return db, nil
 }
 
-// Determine if the map has an entry with the key
+// Has determines if a connection exists in the array
 func Has(connectionId string) bool {
 	_, ok := dbInstances[connectionId]
 	return ok
@@ -102,23 +101,24 @@ func (db *DB) Close() error {
 }
 
 type Config struct {
-	ConnName string
-	Driver   string
-	Host     string
-	Port     int
-	User     string
-	Password string
-	Database string
-	Params   string
+	ConnName   string
+	Driver     string
+	Host       string
+	Port       int
+	User       string
+	Password   string
+	Database   string
+	Params     string
+	AutoCreate bool
 }
 
-type Connection struct {
+type connection struct {
 	forceCreateDb bool
 	config        *Config
 	db            *DB
 }
 
-func NewConnection(dbc *Config) *Connection {
+func NewConnection(dbc *Config) *connection {
 	if dbc.ConnName == "" {
 		dbc.ConnName = "default"
 	}
@@ -147,15 +147,15 @@ func NewConnection(dbc *Config) *Connection {
 		panic("a path to database file must be provided for sqlite")
 	}
 
-	return &Connection{false, dbc, nil}
+	return &connection{dbc.AutoCreate, dbc, nil}
 }
 
-func (c *Connection) WithForceCreateDb() *Connection {
+func (c *connection) WithForceCreateDb() *connection {
 	c.forceCreateDb = true
 	return c
 }
 
-func (c *Connection) IsOpen() bool {
+func (c *connection) IsOpen() bool {
 	if c.db == nil {
 		return false
 	}
@@ -173,12 +173,12 @@ func (c *Connection) IsOpen() bool {
 	return true
 }
 
-func (c *Connection) WithDatabase(database string) *Connection {
+func (c *connection) WithDatabase(database string) *connection {
 	c.config.Database = database
 	return c
 }
 
-func (c *Connection) connectToMySQL() (*DB, error) {
+func (c *connection) connectToMySQL() (*DB, error) {
 	dbConfig := c.config
 	dsn := &DataSource{
 		Dialect:  DialectMySQL,
@@ -202,7 +202,7 @@ func (c *Connection) connectToMySQL() (*DB, error) {
 	return dbInstance, nil
 }
 
-func (c *Connection) connectToPostgres() (*DB, error) {
+func (c *connection) connectToPostgres() (*DB, error) {
 	dbConfig := c.config
 	dsn := &DataSource{
 		Dialect:  DialectPostgres,
@@ -214,6 +214,10 @@ func (c *Connection) connectToPostgres() (*DB, error) {
 		Params:   dbConfig.Params,
 	}
 	dsnStr, err := dsn.String()
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+
 	db, err := gorm.Open(postgres.Open(dsnStr), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
@@ -226,32 +230,34 @@ func (c *Connection) connectToPostgres() (*DB, error) {
 	return dbInstance, nil
 }
 
-func (c *Connection) Close() error {
+func (c *connection) Close() error {
 	return c.db.Close()
 }
 
-func (c *Connection) existsDb() error {
-	var dbConn *DB
+func (c *connection) existsDb() error {
+	var db *DB
 	var err error
 	dbConfig := c.config
 	database := c.config.Database
 
 	defer func() {
 		c.WithDatabase(database)
-		if dbConn != nil {
-			slog.Info(fmt.Sprintf("closing db session %s", dbConn.Name()))
-			dbConn.Close()
+		if db != nil {
+			slog.Info(fmt.Sprintf("closing db session %s", db.Name()))
+			if err := db.Close(); err != nil {
+				slog.Error(fmt.Sprintf("failed to close db session %s", db.Name()))
+			}
 		}
 	}()
 
 	if dbConfig.Driver == DialectPostgres {
-		dbConn, err = c.WithDatabase(DefaultPostgresDB).connectToPostgres()
+		db, err = c.WithDatabase(DefaultPostgresDB).connectToPostgres()
 		if err != nil {
 			return fmt.Errorf("failed to connect: %w", err)
 		}
 
 		var fetchedDatabase string
-		dbConn.Raw("SELECT datname FROM pg_catalog.pg_database WHERE lower(datname) = lower(?)", database).Scan(&fetchedDatabase)
+		db.Raw("SELECT datname FROM pg_catalog.pg_database WHERE lower(datname) = lower(?)", database).Scan(&fetchedDatabase)
 		if fetchedDatabase == "" {
 			return ErrCannotConnectToDefaultDB
 		}
@@ -262,13 +268,13 @@ func (c *Connection) existsDb() error {
 	}
 
 	if dbConfig.Driver == DialectMySQL {
-		dbConn, err = c.WithDatabase(DefaultMysqlDB).connectToMySQL()
+		db, err = c.WithDatabase(DefaultMysqlDB).connectToMySQL()
 		if err != nil {
 			return fmt.Errorf("failed to connect: %w", err)
 		}
 
 		var fetchedDatabase string
-		dbConn.Raw("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?", database).Scan(&fetchedDatabase)
+		db.Raw("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?", database).Scan(&fetchedDatabase)
 		if fetchedDatabase == "" {
 			return ErrCannotConnectToDefaultDB
 		}
@@ -281,16 +287,20 @@ func (c *Connection) existsDb() error {
 	return ErrUnknownDriver
 }
 
-func (c *Connection) Open() (*DB, error) {
+func (c *connection) Open() (*DB, error) {
 	if c.IsOpen() {
-		log.Println(fmt.Sprintf("closing db session %s, before opening a new one", c.config.Database))
-		c.Close()
+		slog.Info(fmt.Sprintf("closing db session %s, before opening a new one", c.config.Database))
+		if err := c.Close(); err != nil {
+			return nil, err
+		}
 	}
 
 	if c.forceCreateDb {
 		err := c.existsDb()
 		if err != nil && errors.Is(err, ErrNoSuchDatabase) {
-			c.createDb()
+			if err := c.createDb(); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -314,7 +324,7 @@ func (c *Connection) Open() (*DB, error) {
 	}
 }
 
-func (c *Connection) createDb() error {
+func (c *connection) createDb() error {
 	dbConfig := c.config
 	database := dbConfig.Database
 	var db *DB
@@ -324,7 +334,9 @@ func (c *Connection) createDb() error {
 		c.WithDatabase(database)
 		if db != nil {
 			slog.Info(fmt.Sprintf("closing db session %s", database))
-			db.Close()
+			if err := db.Close(); err != nil {
+				slog.Error(fmt.Sprintf("failed to close db session %s", database))
+			}
 		}
 	}()
 
@@ -350,7 +362,7 @@ func (c *Connection) createDb() error {
 		if err != nil {
 			return err
 		} else {
-			log.Println("database", database, "created")
+			slog.Info("database", database, "created")
 			return nil
 		}
 	}

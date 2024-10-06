@@ -21,8 +21,11 @@ func (provider *SessionServiceProvider) Register(app *App) {
 	// 	},
 	// }
 	// sm := session.NewSession(redisstore.New(pool))
-	sm := session.NewSession(session.NewFileStore(""))
-	app.SetSession(sm)
+
+	sm := session.NewSession(session.NewFileSession(""))
+	app.Singleton((*session.Session)(nil), func() *session.Session {
+		return sm
+	})
 }
 
 func (provider *SessionServiceProvider) Boot() {

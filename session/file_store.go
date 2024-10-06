@@ -64,7 +64,7 @@ func (fs *FileStore) Commit(token string, b []byte, expiry time.Time) error {
 	return os.WriteFile(filepath.Join(fs.dir, token), []byte(data), 0644)
 }
 
-func NewFileStore(directoryPath string) *FileStore {
+func NewFileSession(directoryPath string) *FileStore {
 	if directoryPath == "" {
 		directoryPath = defaultDir
 	}

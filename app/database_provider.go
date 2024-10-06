@@ -13,19 +13,19 @@ type DatabaseServiceProvider struct {
 
 func (provider *DatabaseServiceProvider) Register(app *App) {
 	dbConfig := &db.Config{
-		ConnName: "default",
-		Driver:   config.Get[string]("database.connections.default.driver"),
-		Host:     config.Get[string]("database.connections.default.host"),
-		Port:     config.Get[int]("database.connections.default.port"),
-		Database: config.Get[string]("database.connections.default.database"),
-		User:     config.Get[string]("database.connections.default.user"),
-		Password: config.Get[string]("database.connections.default.password"),
-		Params:   config.Get[string]("database.connections.default.params"),
+		ConnName:   "default",
+		Driver:     config.Get[string]("database.connections.default.driver"),
+		Host:       config.Get[string]("database.connections.default.host"),
+		Port:       config.Get[int]("database.connections.default.port"),
+		Database:   config.Get[string]("database.connections.default.database"),
+		User:       config.Get[string]("database.connections.default.user"),
+		Password:   config.Get[string]("database.connections.default.password"),
+		Params:     config.Get[string]("database.connections.default.params"),
+		AutoCreate: config.Get[bool]("database.connections.default.auto_create", false),
 	}
 
-	dbc, err := db.NewConnection(dbConfig).
-		// WithForceCreateDb(). // Force create db if not exists
-		Open()
+	dbc, err := db.NewConnection(dbConfig).Open()
+
 	if err != nil {
 		panic(err)
 	}

@@ -629,8 +629,7 @@ func (c *Context) ValidationError(err error) error {
 		return c.JSON(http.StatusUnprocessableEntity, M{"errors": err})
 	}
 
-	c.WithErrors(err.(shared.ValidationErrors)).WithInput().Back(http.StatusFound)
-	return nil
+	return c.WithErrors(err.(shared.ValidationErrors)).WithInput().Back(http.StatusFound)
 }
 
 func (c *Context) InternalServerError(err error) error {
