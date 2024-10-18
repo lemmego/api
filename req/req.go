@@ -19,15 +19,23 @@ import (
 
 const InKey = "input"
 
-type Ctx interface {
-	Request() *http.Request
-	ResponseWriter() http.ResponseWriter
-	Set(key string, value interface{})
-	Get(key string) interface{}
-}
-
 type Validator interface {
 	Validate() error
+}
+
+type RequestResponder interface {
+	Request() *http.Request
+	ResponseWriter() http.ResponseWriter
+}
+
+type GetSetter interface {
+	Get(key string) interface{}
+	Set(key string, value interface{})
+}
+
+type Context interface {
+	RequestResponder
+	GetSetter
 }
 
 type MalformedRequest struct {
@@ -41,7 +49,7 @@ func (mr *MalformedRequest) Error() string {
 
 func WantsJSON(r *http.Request) bool {
 	accept := r.Header.Get("Accept")
-	return strings.Contains(accept, "application/json")
+	return strings.HasSuffix(accept, "json")
 }
 
 func WantsHTML(r *http.Request) bool {
@@ -67,7 +75,10 @@ func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}) err
 	dec.DisallowUnknownFields()
 
 	err = dec.Decode(&dst)
+
+	// Repopulate the body for potential future-streaming from the buffer.
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 	if err != nil {
 		var syntaxError *json.SyntaxError
 		var unmarshalTypeError *json.UnmarshalTypeError
@@ -121,9 +132,9 @@ func HasFormData(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data")
 }
 
-func ParseInput(ctx Ctx, inputStruct any, opts ...core.Option) error {
-	if !HasFormData(ctx.Request()) && (WantsJSON(ctx.Request()) || gonertia.IsInertiaRequest(ctx.Request())) {
-		if err := DecodeJSONBody(ctx.ResponseWriter(), ctx.Request(), inputStruct); err != nil {
+func ParseInput(rr RequestResponder, inputStruct any, opts ...core.Option) error {
+	if !HasFormData(rr.Request()) && (WantsJSON(rr.Request()) || gonertia.IsInertiaRequest(rr.Request())) {
+		if err := DecodeJSONBody(rr.ResponseWriter(), rr.Request(), inputStruct); err != nil {
 			return err
 		}
 		return nil
@@ -134,7 +145,7 @@ func ParseInput(ctx Ctx, inputStruct any, opts ...core.Option) error {
 		return err
 	}
 
-	input, err := co.Decode(ctx.Request())
+	input, err := co.Decode(rr.Request())
 	if err != nil {
 		return err
 	}
@@ -144,12 +155,12 @@ func ParseInput(ctx Ctx, inputStruct any, opts ...core.Option) error {
 	return nil
 }
 
-func In(ctx Ctx, inputStruct any, opts ...core.Option) error {
-	if WantsJSON(ctx.Request()) || gonertia.IsInertiaRequest(ctx.Request()) {
-		if err := DecodeJSONBody(ctx.ResponseWriter(), ctx.Request(), inputStruct); err != nil {
+func In(c Context, inputStruct any, opts ...core.Option) error {
+	if WantsJSON(c.Request()) || gonertia.IsInertiaRequest(c.Request()) {
+		if err := DecodeJSONBody(c.ResponseWriter(), c.Request(), inputStruct); err != nil {
 			return err
 		}
-		ctx.Set(InKey, inputStruct)
+		c.Set(InKey, inputStruct)
 		return nil
 	}
 	co, err := httpin.New(inputStruct, opts...)
@@ -158,11 +169,11 @@ func In(ctx Ctx, inputStruct any, opts ...core.Option) error {
 		return err
 	}
 
-	input, err := co.Decode(ctx.Request())
+	input, err := co.Decode(c.Request())
 	if err != nil {
 		return err
 	}
 
-	ctx.Set(InKey, input)
+	c.Set(InKey, input)
 	return nil
 }

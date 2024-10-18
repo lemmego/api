@@ -44,6 +44,10 @@ func NewS3Storage(bucket, region, accessKey, secretKey string, baseEndpoint stri
 	}, nil
 }
 
+func (s3s *S3Storage) Driver() string {
+	return "s3"
+}
+
 func (s3s *S3Storage) Read(path string) (io.ReadCloser, error) {
 	// Specify the bucket name and object key
 	input := &s3.GetObjectInput{

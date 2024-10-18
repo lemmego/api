@@ -1,13 +1,13 @@
 package app
 
 type AuthServiceProvider struct {
-	*BaseServiceProvider
+	*ServiceProvider
 }
 
-func (provider *AuthServiceProvider) Register(app *App) {
+func (provider *AuthServiceProvider) Register(a AppManager) {
 	//
 }
 
-func (provider *AuthServiceProvider) Boot() {
+func (provider *AuthServiceProvider) Boot(a AppManager) {
 	//
 }

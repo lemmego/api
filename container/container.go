@@ -64,9 +64,28 @@ func (c *Container) ResolveCtx(ctx context.Context, out interface{}) error {
 
 func (c *Container) bind(abstract interface{}, concrete interface{}, singleton, scoped bool) {
 	abstractType := reflect.TypeOf(abstract)
-	if abstractType.Kind() == reflect.Ptr {
+
+	// Handle both pointer and non-pointer types for interfaces
+	if abstractType == nil {
+		// This case handles (InterfaceName)(nil)
+		concreteType := reflect.TypeOf(concrete)
+		if concreteType.Kind() == reflect.Func {
+			returnType := concreteType.Out(0)
+			if returnType.Kind() == reflect.Interface {
+				abstractType = returnType
+			} else if returnType.Kind() == reflect.Ptr {
+				abstractType = returnType.Elem()
+			} else {
+				panic(fmt.Sprintf("Invalid concrete type for nil abstract: %v", concreteType))
+			}
+		} else {
+			panic(fmt.Sprintf("Invalid concrete type for nil abstract: %v", concreteType))
+		}
+	} else if abstractType.Kind() == reflect.Ptr {
+		// This case handles (*InterfaceName)(nil) and (*StructName)(nil)
 		abstractType = abstractType.Elem()
 	}
+
 	fmt.Printf("Binding: %v\n", abstractType) // Debug log
 	c.bindings[abstractType] = bindingInfo{
 		resolver:  concrete,
@@ -96,7 +115,7 @@ func (c *Container) resolveInScope(out interface{}, scopeID string) error {
 			fmt.Printf("Direct binding not found, searching for implementations...\n") // Debug log
 			for boundType, boundBinding := range c.bindings {
 				fmt.Printf("Checking: %v\n", boundType) // Debug log
-				if boundType.Implements(abstractType) {
+				if boundType.Implements(abstractType) || reflect.PtrTo(boundType).Implements(abstractType) {
 					binding = boundBinding
 					exists = true
 					fmt.Printf("Found implementation: %v\n", boundType) // Debug log

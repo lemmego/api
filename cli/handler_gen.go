@@ -81,24 +81,33 @@ var handlerCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		var handlerName string
 
-		form := huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter the resource name in snake_case").
-					Value(&handlerName).
-					Validate(SnakeCase),
-			),
-		)
-
-		err := form.Run()
-
-		if err != nil {
-			fmt.Println(err)
+		if !shouldRunInteractively && len(args) == 0 {
+			fmt.Println("Please provide a handler name")
 			return
 		}
 
+		if shouldRunInteractively && len(args) == 0 {
+			form := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Enter the resource name in snake_case").
+						Value(&handlerName).
+						Validate(SnakeCase),
+				),
+			)
+
+			err := form.Run()
+
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+		} else {
+			handlerName = args[0]
+		}
+
 		mg := NewHandlerGenerator(&HandlerConfig{Name: handlerName})
-		err = mg.Generate()
+		err := mg.Generate()
 		if err != nil {
 			fmt.Println(err)
 			return

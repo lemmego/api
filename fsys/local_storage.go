@@ -31,6 +31,10 @@ func NewLocalStorage(basePath string) *LocalStorage {
 	}
 }
 
+func (ls *LocalStorage) Driver() string {
+	return "local"
+}
+
 func (ls *LocalStorage) Read(path string) (io.ReadCloser, error) {
 	fullPath := ls.RootDirectory + "/" + path
 	return os.Open(fullPath)

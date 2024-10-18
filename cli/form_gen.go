@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var flavor string
+
 //go:embed templ_form.txt
 var templFormStub string
 
@@ -115,6 +117,10 @@ func (fg *FormGenerator) Generate() error {
 	return nil
 }
 
+func init() {
+	formCmd.Flags().StringVarP(&flavor, "flavor", "f", "react", "Which flavor do you want? (templ, react)")
+}
+
 var formCmd = &cobra.Command{
 	Use:   "form",
 	Short: "Generate a form template/view",
@@ -122,97 +128,105 @@ var formCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		var templName, route string
 		var fields []*FormField
-		var flavor string
-
-		nameForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Which flavor do you want?").
-					Options(huh.NewOptions("templ", "react")...).
-					Value(&flavor),
-				huh.NewInput().
-					Title("Enter the resource name in snake_case").
-					Value(&templName).
-					Validate(SnakeCase),
-				huh.NewInput().
-					Title("Enter the route where the form should be submitted (e.g. /login)").
-					Value(&route),
-			),
-		)
-
-		err := nameForm.Run()
-		if err != nil {
-			fmt.Println(err)
+		if !shouldRunInteractively && len(args) == 0 {
+			fmt.Println("Please provide a form name")
 			return
 		}
 
-		for {
-			var fieldName, fieldType string
-			var choices []string
+		if shouldRunInteractively && len(args) == 0 {
 
-			fieldNameForm := huh.NewForm(
+			nameForm := huh.NewForm(
 				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Which flavor do you want?").
+						Options(huh.NewOptions("templ", "react")...).
+						Value(&flavor),
 					huh.NewInput().
-						Title("Enter the field name in snake_case").
-						Validate(SnakeCaseEmptyAllowed).
-						Value(&fieldName),
+						Title("Enter the resource name in snake_case").
+						Value(&templName).
+						Validate(SnakeCase),
+					huh.NewInput().
+						Title("Enter the route where the form should be submitted (e.g. /login)").
+						Value(&route),
 				),
 			)
 
-			err = fieldNameForm.Run()
+			err := nameForm.Run()
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
 
-			if fieldName == "" {
-				break
-			}
+			for {
+				var fieldName, fieldType string
+				var choices []string
 
-			fieldTypeForm := huh.NewForm(
-				huh.NewGroup(
-					huh.NewSelect[string]().
-						Title("Select the field type").
-						Value(&fieldType).
-						Options(huh.NewOptions(formFieldTypes...)...),
-				),
-			)
+				fieldNameForm := huh.NewForm(
+					huh.NewGroup(
+						huh.NewInput().
+							Title("Enter the field name in snake_case").
+							Validate(SnakeCaseEmptyAllowed).
+							Value(&fieldName),
+					),
+				)
 
-			err = fieldTypeForm.Run()
-			if err != nil {
-				fmt.Println("Error:", err.Error())
-				return
-			}
-
-			if fieldType == "radio" || fieldType == "checkbox" || fieldType == "dropdown" {
-
-				for {
-					var choice string
-					choicesForm := huh.NewForm(
-						huh.NewGroup(
-							huh.NewInput().
-								Title(fmt.Sprintf("Add new choice for %s %s (Press enter to finish)", fieldName, fieldType)).
-								Value(&choice),
-						),
-					)
-
-					err = choicesForm.Run()
-					if err != nil {
-						fmt.Println(err)
-						return
-					}
-
-					if choice == "" {
-						break
-					}
-					choices = append(choices, choice)
+				err = fieldNameForm.Run()
+				if err != nil {
+					fmt.Println(err)
+					return
 				}
+
+				if fieldName == "" {
+					break
+				}
+
+				fieldTypeForm := huh.NewForm(
+					huh.NewGroup(
+						huh.NewSelect[string]().
+							Title("Select the field type").
+							Value(&fieldType).
+							Options(huh.NewOptions(formFieldTypes...)...),
+					),
+				)
+
+				err = fieldTypeForm.Run()
+				if err != nil {
+					fmt.Println("Error:", err.Error())
+					return
+				}
+
+				if fieldType == "radio" || fieldType == "checkbox" || fieldType == "dropdown" {
+
+					for {
+						var choice string
+						choicesForm := huh.NewForm(
+							huh.NewGroup(
+								huh.NewInput().
+									Title(fmt.Sprintf("Add new choice for %s %s (Press enter to finish)", fieldName, fieldType)).
+									Value(&choice),
+							),
+						)
+
+						err = choicesForm.Run()
+						if err != nil {
+							fmt.Println(err)
+							return
+						}
+
+						if choice == "" {
+							break
+						}
+						choices = append(choices, choice)
+					}
+				}
+				fields = append(fields, &FormField{Name: fieldName, Type: fieldType, Choices: choices})
 			}
-			fields = append(fields, &FormField{Name: fieldName, Type: fieldType, Choices: choices})
+		} else {
+			templName = args[0]
 		}
 
 		fg := NewFormGenerator(&FormConfig{Name: templName, Flavor: flavor, Fields: fields, Route: route})
-		err = fg.Generate()
+		err := fg.Generate()
 		if err != nil {
 			fmt.Println(err)
 			return

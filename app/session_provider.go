@@ -4,11 +4,11 @@ import (
 	"github.com/lemmego/api/session"
 )
 
-type SessionServiceProvider struct {
-	*BaseServiceProvider
+type SessionProvider struct {
+	*ServiceProvider
 }
 
-func (provider *SessionServiceProvider) Register(app *App) {
+func (provider *SessionProvider) Register(a AppManager) {
 	// Establish connection pool to Redis.
 	// pool := &redis.Pool{
 	// 	MaxIdle: 10,
@@ -23,11 +23,9 @@ func (provider *SessionServiceProvider) Register(app *App) {
 	// sm := session.NewSession(redisstore.New(pool))
 
 	sm := session.NewSession(session.NewFileSession(""))
-	app.Singleton((*session.Session)(nil), func() *session.Session {
-		return sm
-	})
+	provider.App.AddService(sm)
 }
 
-func (provider *SessionServiceProvider) Boot() {
+func (provider *SessionProvider) Boot(a AppManager) {
 	//
 }

@@ -91,57 +91,50 @@ var inputCmd = &cobra.Command{
 		var inputName string
 		var fields []*InputField
 
-		nameForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter the input name in snake_case").
-					Value(&inputName).
-					Validate(SnakeCase),
-			),
-		)
-		err := nameForm.Run()
-		if err != nil {
+		if !shouldRunInteractively && len(args) == 0 {
+			fmt.Println("Please provide an input name")
 			return
 		}
 
-		for {
-			var fieldName, fieldType string
-			const required = "Required"
-			const unique = "Unique"
-			selectedAttrs := []string{}
-			fieldNameForm := huh.NewForm(
+		if shouldRunInteractively {
+			nameForm := huh.NewForm(
 				huh.NewGroup(
 					huh.NewInput().
-						Title("Enter the field name in snake_case").
-						Validate(SnakeCaseEmptyAllowed).
-						Value(&fieldName),
+						Title("Enter the input name in snake_case").
+						Value(&inputName).
+						Validate(SnakeCase),
 				),
 			)
-			err := fieldNameForm.Run()
-			if err != nil {
-				return
-			}
-			if fieldName == "" {
-				break
-			}
-			fieldTypeForm := huh.NewForm(
-				huh.NewGroup(
-					huh.NewSelect[string]().
-						Title("What should the data type be?").
-						Options(huh.NewOptions(inputFieldTypes...)...).
-						Value(&fieldType),
-				),
-			)
-			err = fieldTypeForm.Run()
+			err := nameForm.Run()
 			if err != nil {
 				return
 			}
 
-			if fieldType == "custom" {
-				fieldTypeForm := huh.NewForm(
+			for {
+				var fieldName, fieldType string
+				const required = "Required"
+				const unique = "Unique"
+				selectedAttrs := []string{}
+				fieldNameForm := huh.NewForm(
 					huh.NewGroup(
 						huh.NewInput().
-							Title("Enter the data type (You'll need to import it if necessary)").
+							Title("Enter the field name in snake_case").
+							Validate(SnakeCaseEmptyAllowed).
+							Value(&fieldName),
+					),
+				)
+				err := fieldNameForm.Run()
+				if err != nil {
+					return
+				}
+				if fieldName == "" {
+					break
+				}
+				fieldTypeForm := huh.NewForm(
+					huh.NewGroup(
+						huh.NewSelect[string]().
+							Title("What should the data type be?").
+							Options(huh.NewOptions(inputFieldTypes...)...).
 							Value(&fieldType),
 					),
 				)
@@ -149,30 +142,46 @@ var inputCmd = &cobra.Command{
 				if err != nil {
 					return
 				}
-			}
-			selectedAttrsForm := huh.NewForm(
-				huh.NewGroup(
-					huh.NewMultiSelect[string]().
-						Title("Press x to select the attributes").
-						Options(huh.NewOptions(required, unique)...).
-						Value(&selectedAttrs),
-				),
-			)
-			err = selectedAttrsForm.Run()
-			if err != nil {
-				return
-			}
 
-			fields = append(fields, &InputField{
-				Name:     fieldName,
-				Type:     fieldType,
-				Required: slices.Contains(selectedAttrs, required),
-				Unique:   slices.Contains(selectedAttrs, unique),
-			})
+				if fieldType == "custom" {
+					fieldTypeForm := huh.NewForm(
+						huh.NewGroup(
+							huh.NewInput().
+								Title("Enter the data type (You'll need to import it if necessary)").
+								Value(&fieldType),
+						),
+					)
+					err = fieldTypeForm.Run()
+					if err != nil {
+						return
+					}
+				}
+				selectedAttrsForm := huh.NewForm(
+					huh.NewGroup(
+						huh.NewMultiSelect[string]().
+							Title("Press x to select the attributes").
+							Options(huh.NewOptions(required, unique)...).
+							Value(&selectedAttrs),
+					),
+				)
+				err = selectedAttrsForm.Run()
+				if err != nil {
+					return
+				}
+
+				fields = append(fields, &InputField{
+					Name:     fieldName,
+					Type:     fieldType,
+					Required: slices.Contains(selectedAttrs, required),
+					Unique:   slices.Contains(selectedAttrs, unique),
+				})
+			}
+		} else {
+			inputName = args[0]
 		}
 
-		mg := NewInputGenerator(&InputConfig{Name: inputName, Fields: fields})
-		err = mg.Generate()
+		ig := NewInputGenerator(&InputConfig{Name: inputName, Fields: fields})
+		err := ig.Generate()
 		if err != nil {
 			fmt.Println(err)
 			return

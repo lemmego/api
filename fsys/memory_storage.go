@@ -21,6 +21,10 @@ func NewMemoryStorage() *MemoryStorage {
 	}
 }
 
+func (ms *MemoryStorage) Driver() string {
+	return "memory"
+}
+
 func (ms *MemoryStorage) Read(path string) (io.ReadCloser, error) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()

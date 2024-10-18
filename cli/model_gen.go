@@ -163,65 +163,58 @@ var modelCmd = &cobra.Command{
 		var modelName string
 		var fields []*ModelField
 
-		nameForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter the model name in snake_case and singular form").
-					Value(&modelName).
-					Validate(SnakeCase),
-			),
-		)
-		err := nameForm.Run()
-		if err != nil {
+		if !shouldRunInteractively && len(args) == 0 {
+			fmt.Println("Please provide a model name")
 			return
 		}
 
-		for {
-			var fieldName, fieldType string
-			const required = "Required"
-			const unique = "Unique"
-			selectedAttrs := []string{}
-
-			fieldNameForm := huh.NewForm(
+		if shouldRunInteractively && len(args) == 0 {
+			nameForm := huh.NewForm(
 				huh.NewGroup(
 					huh.NewInput().
-						Title("Enter the field name in snake_case.\nThe following fields will be provided:\nid, created_at, updated_at, deleted_at").
-						Validate(SnakeCaseEmptyAllowed).
-						Validate(
-							NotIn(
-								[]string{"id", "created_at", "updated_at", "deleted_at"},
-								"No need, this field will be provided",
-							),
-						).
-						Value(&fieldName),
+						Title("Enter the model name in snake_case and singular form").
+						Value(&modelName).
+						Validate(SnakeCase),
 				),
 			)
-			err := fieldNameForm.Run()
-			if err != nil {
-				return
-			}
-			if fieldName == "" {
-				break
-			}
-
-			fieldTypeForm := huh.NewForm(
-				huh.NewGroup(
-					huh.NewSelect[string]().
-						Title("What should the data type be?").
-						Options(huh.NewOptions(modelFieldTypes...)...).
-						Value(&fieldType),
-				),
-			)
-			err = fieldTypeForm.Run()
+			err := nameForm.Run()
 			if err != nil {
 				return
 			}
 
-			if fieldType == "custom" {
-				fieldTypeForm := huh.NewForm(
+			for {
+				var fieldName, fieldType string
+				const required = "Required"
+				const unique = "Unique"
+				selectedAttrs := []string{}
+
+				fieldNameForm := huh.NewForm(
 					huh.NewGroup(
 						huh.NewInput().
-							Title("Enter the data type (You'll need to import it if necessary)").
+							Title("Enter the field name in snake_case.\nThe following fields will be provided:\nid, created_at, updated_at, deleted_at").
+							Validate(SnakeCaseEmptyAllowed).
+							Validate(
+								NotIn(
+									[]string{"id", "created_at", "updated_at", "deleted_at"},
+									"No need, this field will be provided",
+								),
+							).
+							Value(&fieldName),
+					),
+				)
+				err := fieldNameForm.Run()
+				if err != nil {
+					return
+				}
+				if fieldName == "" {
+					break
+				}
+
+				fieldTypeForm := huh.NewForm(
+					huh.NewGroup(
+						huh.NewSelect[string]().
+							Title("What should the data type be?").
+							Options(huh.NewOptions(modelFieldTypes...)...).
 							Value(&fieldType),
 					),
 				)
@@ -229,34 +222,50 @@ var modelCmd = &cobra.Command{
 				if err != nil {
 					return
 				}
-			}
 
-			selectedAttrsForm := huh.NewForm(
-				huh.NewGroup(
-					huh.NewMultiSelect[string]().
-						Title("Press x to select the attributes").
-						Options(huh.NewOptions(required, unique)...).
-						Value(&selectedAttrs),
-				),
-			)
-			err = selectedAttrsForm.Run()
-			if err != nil {
-				return
-			}
+				if fieldType == "custom" {
+					fieldTypeForm := huh.NewForm(
+						huh.NewGroup(
+							huh.NewInput().
+								Title("Enter the data type (You'll need to import it if necessary)").
+								Value(&fieldType),
+						),
+					)
+					err = fieldTypeForm.Run()
+					if err != nil {
+						return
+					}
+				}
 
-			fields = append(
-				fields,
-				&ModelField{
-					Name:     fieldName,
-					Type:     fieldType,
-					Required: slices.Contains(selectedAttrs, required),
-					Unique:   slices.Contains(selectedAttrs, unique),
-				},
-			)
+				selectedAttrsForm := huh.NewForm(
+					huh.NewGroup(
+						huh.NewMultiSelect[string]().
+							Title("Press x to select the attributes").
+							Options(huh.NewOptions(required, unique)...).
+							Value(&selectedAttrs),
+					),
+				)
+				err = selectedAttrsForm.Run()
+				if err != nil {
+					return
+				}
+
+				fields = append(
+					fields,
+					&ModelField{
+						Name:     fieldName,
+						Type:     fieldType,
+						Required: slices.Contains(selectedAttrs, required),
+						Unique:   slices.Contains(selectedAttrs, unique),
+					},
+				)
+			}
+		} else {
+			modelName = args[0]
 		}
 
 		mg := NewModelGenerator(&ModelConfig{Name: modelName, Fields: fields})
-		err = mg.Generate()
+		err := mg.Generate()
 		if err != nil {
 			fmt.Println(err)
 			return

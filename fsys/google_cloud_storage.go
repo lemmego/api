@@ -34,6 +34,10 @@ func NewGCSStorage(projectID, bucket, serviceAccountKey string) (*GCSStorage, er
 	}, nil
 }
 
+func (gcs *GCSStorage) Driver() string {
+	return "gcs"
+}
+
 func (gcs *GCSStorage) Read(path string) (io.ReadCloser, error) {
 	ctx := context.Background()
 	reader, err := gcs.Client.Bucket(gcs.BucketName).Object(path).NewReader(ctx)

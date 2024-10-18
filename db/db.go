@@ -112,50 +112,50 @@ type Config struct {
 	AutoCreate bool
 }
 
-type connection struct {
+type Connection struct {
 	forceCreateDb bool
 	config        *Config
 	db            *DB
 }
 
-func NewConnection(dbc *Config) *connection {
+func NewConnection(dbc *Config) *Connection {
 	if dbc.ConnName == "" {
-		dbc.ConnName = "default"
+		dbc.ConnName = "sqlite"
 	}
 
-	if dbc.Driver != "mysql" && dbc.Driver != "postgres" && dbc.Driver != "sqlite" {
+	if dbc.Driver != DialectMySQL && dbc.Driver != DialectPostgres && dbc.Driver != DialectSQLite {
 		panic("unsupported driver")
 	}
 
-	if dbc.Driver != "sqlite" && dbc.Host == "" {
+	if dbc.Driver != DialectSQLite && dbc.Host == "" {
 		dbc.Host = "localhost"
 	}
 
-	if dbc.Driver == "mysql" && dbc.Port == 0 {
+	if dbc.Driver == DialectMySQL && dbc.Port == 0 {
 		dbc.Port = 3306
 	}
 
-	if dbc.Driver == "postgres" && dbc.Port == 0 {
+	if dbc.Driver == DialectPostgres && dbc.Port == 0 {
 		dbc.Port = 5432
 	}
 
-	if dbc.Driver != "sqlite" && dbc.User == "" {
+	if dbc.Driver != DialectSQLite && dbc.User == "" {
 		panic("db username must be provided")
 	}
 
-	if dbc.Driver == "sqlite" && dbc.Database == "" {
+	if dbc.Driver == DialectSQLite && dbc.Database == "" {
 		panic("a path to database file must be provided for sqlite")
 	}
 
-	return &connection{dbc.AutoCreate, dbc, nil}
+	return &Connection{dbc.AutoCreate, dbc, nil}
 }
 
-func (c *connection) WithForceCreateDb() *connection {
+func (c *Connection) WithForceCreateDb() *Connection {
 	c.forceCreateDb = true
 	return c
 }
 
-func (c *connection) IsOpen() bool {
+func (c *Connection) IsOpen() bool {
 	if c.db == nil {
 		return false
 	}
@@ -173,12 +173,12 @@ func (c *connection) IsOpen() bool {
 	return true
 }
 
-func (c *connection) WithDatabase(database string) *connection {
+func (c *Connection) WithDatabase(database string) *Connection {
 	c.config.Database = database
 	return c
 }
 
-func (c *connection) connectToMySQL() (*DB, error) {
+func (c *Connection) connectToMySQL() (*DB, error) {
 	dbConfig := c.config
 	dsn := &DataSource{
 		Dialect:  DialectMySQL,
@@ -202,7 +202,7 @@ func (c *connection) connectToMySQL() (*DB, error) {
 	return dbInstance, nil
 }
 
-func (c *connection) connectToPostgres() (*DB, error) {
+func (c *Connection) connectToPostgres() (*DB, error) {
 	dbConfig := c.config
 	dsn := &DataSource{
 		Dialect:  DialectPostgres,
@@ -230,11 +230,11 @@ func (c *connection) connectToPostgres() (*DB, error) {
 	return dbInstance, nil
 }
 
-func (c *connection) Close() error {
+func (c *Connection) Close() error {
 	return c.db.Close()
 }
 
-func (c *connection) existsDb() error {
+func (c *Connection) existsDb() error {
 	var db *DB
 	var err error
 	dbConfig := c.config
@@ -287,7 +287,7 @@ func (c *connection) existsDb() error {
 	return ErrUnknownDriver
 }
 
-func (c *connection) Open() (*DB, error) {
+func (c *Connection) Open() (*DB, error) {
 	if c.IsOpen() {
 		slog.Info(fmt.Sprintf("closing db session %s, before opening a new one", c.config.Database))
 		if err := c.Close(); err != nil {
@@ -305,14 +305,14 @@ func (c *connection) Open() (*DB, error) {
 	}
 
 	switch c.config.Driver {
-	case "mysql":
+	case DialectMySQL:
 		db, err := c.connectToMySQL()
 		if err != nil {
 			return nil, err
 		}
 		dbInstances[c.config.ConnName] = db
 		return db, nil
-	case "postgres":
+	case DialectPostgres:
 		db, err := c.connectToPostgres()
 		if err != nil {
 			return nil, err
@@ -324,7 +324,7 @@ func (c *connection) Open() (*DB, error) {
 	}
 }
 
-func (c *connection) createDb() error {
+func (c *Connection) createDb() error {
 	dbConfig := c.config
 	database := dbConfig.Database
 	var db *DB
@@ -340,7 +340,7 @@ func (c *connection) createDb() error {
 		}
 	}()
 
-	if dbConfig.Driver == "postgres" {
+	if dbConfig.Driver == DialectPostgres {
 		if db, err = c.WithDatabase(DefaultPostgresDB).Open(); err != nil {
 			return err
 		}
@@ -353,7 +353,7 @@ func (c *connection) createDb() error {
 		}
 	}
 
-	if dbConfig.Driver == "mysql" {
+	if dbConfig.Driver == DialectMySQL {
 		if db, err = c.WithDatabase("mysql").Open(); err != nil {
 			return err
 		}
