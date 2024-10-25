@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"time"
 
@@ -19,26 +20,62 @@ const (
 )
 
 var (
-	ErrUnknownDriver            = errors.New("unknown driver")
-	ErrNoSuchDatabase           = errors.New("no such database exists")
-	ErrCannotConnectToDefaultDB = errors.New("cannot connect to default db")
-
-	dbInstances = make(map[string]*DB)
+	ErrUnknownDriver                    = errors.New("unknown driver")
+	ErrNoSuchConnection                 = errors.New("no such connection exists")
+	ErrNoSuchDatabase                   = errors.New("no such database exists")
+	ErrCannotConnectToDefaultConnection = errors.New("cannot connect to default connection")
+	ErrCannotConnectToDefaultDB         = errors.New("cannot connect to default db")
 )
 
-type Resolver struct {
-	Ctx context.Context
-	New func(context.Context) (*DB, error)
+type DatabaseManager struct {
+	connections map[string]*Connection
 }
 
-type ResolverFunc func(context.Context) (*DB, error)
-
-type DB struct {
-	*gorm.DB
+func NewDBManager() *DatabaseManager {
+	return &DatabaseManager{connections: make(map[string]*Connection)}
 }
 
-func (db *DB) BindWhere(c context.Context, columnName string) *gorm.DB {
-	return db.Where(fmt.Sprintf("%s = ?", columnName), c.Value(columnName))
+func (dm *DatabaseManager) Get(connName ...string) (*Connection, error) {
+	var dbConn string
+	if len(connName) == 0 {
+		dbConn = os.Getenv("DB_CONNECTION")
+	} else {
+		dbConn = connName[0]
+	}
+
+	if dbConn == "" {
+		return nil, ErrCannotConnectToDefaultConnection
+	}
+
+	if _, ok := dm.connections[dbConn]; ok {
+		return dm.connections[dbConn], nil
+	}
+
+	return nil, ErrNoSuchConnection
+}
+
+func (dm *DatabaseManager) Add(conn *Connection) (*DatabaseManager, error) {
+	if dm.HasConnection(conn.ConnName()) {
+		return nil, errors.New("dm: connection already exists")
+	}
+	dm.connections[conn.ConnName()] = conn
+	return dm, nil
+}
+
+func (dm *DatabaseManager) HasConnection(name string) bool {
+	return dm.connections[name] != nil
+}
+
+func (dm *DatabaseManager) All() map[string]*Connection {
+	return dm.connections
+}
+
+func (conn *Connection) BindWhere(c context.Context, columnName string) *gorm.DB {
+	return conn.db.Where(fmt.Sprintf("%s = ?", columnName), c.Value(columnName))
+}
+
+func (conn *Connection) DB() *gorm.DB {
+	return conn.db
 }
 
 type Model struct {
@@ -46,58 +83,6 @@ type Model struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `json:"deleted_at" gorm:"index"`
-}
-
-func Resolve(ctx context.Context, resolver ResolverFunc) (*DB, error) {
-	db, err := resolver(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return db, nil
-}
-
-// Has determines if a connection exists in the array
-func Has(connectionId string) bool {
-	_, ok := dbInstances[connectionId]
-	return ok
-}
-
-func Get(arg ...interface{}) *DB {
-	if len(arg) == 0 {
-		if val, ok := dbInstances["default"]; ok {
-			return val
-		}
-		panic("default db connection not found")
-	}
-
-	// Check if arg[0] is of type string
-	if val, ok := arg[0].(string); ok {
-		if val == "default" {
-			if val, ok := dbInstances["default"]; ok {
-				return val
-			}
-			return nil
-		}
-		if val, ok := dbInstances[val]; ok {
-			return val
-		}
-		return nil
-	}
-
-	return nil
-}
-
-func (db *DB) Close() error {
-	sqlDB, err := db.DB.DB()
-
-	if err != nil {
-		return errors.New("failed to close db connection")
-	}
-	err = sqlDB.Close()
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 type Config struct {
@@ -115,7 +100,7 @@ type Config struct {
 type Connection struct {
 	forceCreateDb bool
 	config        *Config
-	db            *DB
+	db            *gorm.DB
 }
 
 func NewConnection(dbc *Config) *Connection {
@@ -150,6 +135,38 @@ func NewConnection(dbc *Config) *Connection {
 	return &Connection{dbc.AutoCreate, dbc, nil}
 }
 
+func (c *Connection) Driver() string {
+	return c.config.Driver
+}
+
+func (c *Connection) ConnName() string {
+	return c.config.ConnName
+}
+
+func (c *Connection) DBName() string {
+	return c.config.Database
+}
+
+func (c *Connection) DBHost() string {
+	return c.config.Host
+}
+
+func (c *Connection) DBPort() int {
+	return c.config.Port
+}
+
+func (c *Connection) DBUser() string {
+	return c.config.User
+}
+
+func (c *Connection) DBPassword() string {
+	return c.config.Password
+}
+
+func (c *Connection) DBParams() string {
+	return c.config.Params
+}
+
 func (c *Connection) WithForceCreateDb() *Connection {
 	c.forceCreateDb = true
 	return c
@@ -160,7 +177,7 @@ func (c *Connection) IsOpen() bool {
 		return false
 	}
 
-	sqlDB, err := c.db.DB.DB()
+	sqlDB, err := c.db.DB()
 
 	if err != nil {
 		return false
@@ -178,7 +195,7 @@ func (c *Connection) WithDatabase(database string) *Connection {
 	return c
 }
 
-func (c *Connection) connectToMySQL() (*DB, error) {
+func (c *Connection) connectToMySQL() error {
 	dbConfig := c.config
 	dsn := &DataSource{
 		Dialect:  DialectMySQL,
@@ -192,17 +209,16 @@ func (c *Connection) connectToMySQL() (*DB, error) {
 	dsnStr, err := dsn.String()
 	db, err := gorm.Open(mysql.Open(dsnStr), &gorm.Config{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("failed to connect: %w", err)
 	}
 
 	slog.Info(fmt.Sprintf("created db session %s", dsn.Name))
 
-	dbInstance := &DB{db}
-	c.db = dbInstance
-	return dbInstance, nil
+	c.db = db
+	return nil
 }
 
-func (c *Connection) connectToPostgres() (*DB, error) {
+func (c *Connection) connectToPostgres() error {
 	dbConfig := c.config
 	dsn := &DataSource{
 		Dialect:  DialectPostgres,
@@ -215,27 +231,36 @@ func (c *Connection) connectToPostgres() (*DB, error) {
 	}
 	dsnStr, err := dsn.String()
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("failed to connect: %w", err)
 	}
 
 	db, err := gorm.Open(postgres.Open(dsnStr), &gorm.Config{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("failed to connect: %w", err)
 	}
 
 	slog.Info(fmt.Sprintf("created db session %s", dsn.Name))
 
-	dbInstance := &DB{db}
-	c.db = dbInstance
-	return dbInstance, nil
+	c.db = db
+	return nil
 }
 
 func (c *Connection) Close() error {
-	return c.db.Close()
+	sqlDB, err := c.db.DB()
+
+	if err != nil {
+		return errors.New("failed to close db connection")
+	}
+
+	err = sqlDB.Close()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Connection) existsDb() error {
-	var db *DB
+	var db *gorm.DB
 	var err error
 	dbConfig := c.config
 	database := c.config.Database
@@ -244,17 +269,25 @@ func (c *Connection) existsDb() error {
 		c.WithDatabase(database)
 		if db != nil {
 			slog.Info(fmt.Sprintf("closing db session %s", db.Name()))
-			if err := db.Close(); err != nil {
+			sqlDB, err := db.DB()
+
+			if err != nil {
+				slog.Error(fmt.Sprintf("failed to fetch db session %s", db.Name()))
+			}
+
+			err = sqlDB.Close()
+			if err != nil {
 				slog.Error(fmt.Sprintf("failed to close db session %s", db.Name()))
 			}
 		}
 	}()
 
 	if dbConfig.Driver == DialectPostgres {
-		db, err = c.WithDatabase(DefaultPostgresDB).connectToPostgres()
+		err = c.WithDatabase(DefaultPostgresDB).connectToPostgres()
 		if err != nil {
 			return fmt.Errorf("failed to connect: %w", err)
 		}
+		db = c.db
 
 		var fetchedDatabase string
 		db.Raw("SELECT datname FROM pg_catalog.pg_database WHERE lower(datname) = lower(?)", database).Scan(&fetchedDatabase)
@@ -268,10 +301,11 @@ func (c *Connection) existsDb() error {
 	}
 
 	if dbConfig.Driver == DialectMySQL {
-		db, err = c.WithDatabase(DefaultMysqlDB).connectToMySQL()
+		err = c.WithDatabase(DefaultMysqlDB).connectToMySQL()
 		if err != nil {
 			return fmt.Errorf("failed to connect: %w", err)
 		}
+		db = c.db
 
 		var fetchedDatabase string
 		db.Raw("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?", database).Scan(&fetchedDatabase)
@@ -287,7 +321,7 @@ func (c *Connection) existsDb() error {
 	return ErrUnknownDriver
 }
 
-func (c *Connection) Open() (*DB, error) {
+func (c *Connection) Open() (*Connection, error) {
 	if c.IsOpen() {
 		slog.Info(fmt.Sprintf("closing db session %s, before opening a new one", c.config.Database))
 		if err := c.Close(); err != nil {
@@ -298,7 +332,7 @@ func (c *Connection) Open() (*DB, error) {
 	if c.forceCreateDb {
 		err := c.existsDb()
 		if err != nil && errors.Is(err, ErrNoSuchDatabase) {
-			if err := c.createDb(); err != nil {
+			if err = c.createDb(); err != nil {
 				return nil, err
 			}
 		}
@@ -306,19 +340,19 @@ func (c *Connection) Open() (*DB, error) {
 
 	switch c.config.Driver {
 	case DialectMySQL:
-		db, err := c.connectToMySQL()
+		err := c.connectToMySQL()
 		if err != nil {
 			return nil, err
 		}
-		dbInstances[c.config.ConnName] = db
-		return db, nil
+		//dbInstances[c.config.ConnName] = db
+		return c, nil
 	case DialectPostgres:
-		db, err := c.connectToPostgres()
+		err := c.connectToPostgres()
 		if err != nil {
 			return nil, err
 		}
-		dbInstances[c.config.ConnName] = db
-		return db, nil
+		//dbInstances[c.config.ConnName] = db
+		return c, nil
 	default:
 		return nil, ErrUnknownDriver
 	}
@@ -327,24 +361,32 @@ func (c *Connection) Open() (*DB, error) {
 func (c *Connection) createDb() error {
 	dbConfig := c.config
 	database := dbConfig.Database
-	var db *DB
+	var db *gorm.DB
 	var err error
 
 	defer func() {
 		c.WithDatabase(database)
 		if db != nil {
-			slog.Info(fmt.Sprintf("closing db session %s", database))
-			if err := db.Close(); err != nil {
-				slog.Error(fmt.Sprintf("failed to close db session %s", database))
+			slog.Info(fmt.Sprintf("closing db session %s", db.Name()))
+			sqlDB, err := db.DB()
+
+			if err != nil {
+				slog.Error(fmt.Sprintf("failed to fetch db session %s", db.Name()))
+			}
+
+			err = sqlDB.Close()
+			if err != nil {
+				slog.Error(fmt.Sprintf("failed to close db session %s", db.Name()))
 			}
 		}
 	}()
 
 	if dbConfig.Driver == DialectPostgres {
-		if db, err = c.WithDatabase(DefaultPostgresDB).Open(); err != nil {
+		if _, err = c.WithDatabase(DefaultPostgresDB).Open(); err != nil {
 			return err
 		}
-		err := db.Exec("CREATE DATABASE " + database + " WITH OWNER " + dbConfig.User).Error
+		db = c.db
+		err = db.Exec("CREATE DATABASE " + database + " WITH OWNER " + dbConfig.User).Error
 		if err != nil {
 			return err
 		} else {
@@ -354,11 +396,11 @@ func (c *Connection) createDb() error {
 	}
 
 	if dbConfig.Driver == DialectMySQL {
-		if db, err = c.WithDatabase("mysql").Open(); err != nil {
+		if _, err = c.WithDatabase(DefaultMysqlDB).Open(); err != nil {
 			return err
 		}
-
-		err := db.Exec("CREATE DATABASE IF NOT EXISTS " + database).Error
+		db = c.db
+		err = db.Exec("CREATE DATABASE IF NOT EXISTS " + database).Error
 		if err != nil {
 			return err
 		} else {

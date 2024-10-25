@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/lemmego/api/db"
 	"image"
 	"io"
 	"net"
@@ -527,7 +528,16 @@ func (f *VField) HexColor() *VField {
 
 func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
-	query := f.vee.DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
+	var dm *db.DatabaseManager
+	if err := f.vee.Service(&dm); err != nil {
+		f.vee.AddError(f.name, err.Error())
+	}
+	conn, err := dm.Get()
+	if err != nil {
+		f.vee.AddError(f.name, err.Error())
+	}
+
+	query := conn.DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
 
 	if len(whereClauses) > 0 {
 		for key, value := range whereClauses[0] {

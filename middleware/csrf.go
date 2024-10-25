@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	inertia "github.com/romsar/gonertia"
 	"net/http"
 	"strings"
 
@@ -59,9 +60,12 @@ func VerifyCSRF(c *app.Context) error {
 			}
 			c.PutSession("_token", token)
 
-			if c.I() != nil {
-				c.I().ShareProp("csrfToken", token)
+			var i *inertia.Inertia
+			if err := c.App().Service(&i); err != nil {
+				return err
 			}
+
+			i.ShareProp("csrfToken", token)
 
 			http.SetCookie(c.ResponseWriter(), &http.Cookie{
 				Name:     "XSRF-TOKEN",

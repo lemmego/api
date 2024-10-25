@@ -1,13 +1,16 @@
 package app
 
-type FSProvider struct {
+import "github.com/lemmego/api/fs"
+
+type FilesystemProvider struct {
 	*ServiceProvider
 }
 
-func (provider *FSProvider) Register(a AppManager) {
-	// TODO: implement
+func (provider *FilesystemProvider) Register(a AppManager) {
+	fm := fs.NewFilesystemManager(a.Config())
+	a.AddService(fm)
 }
 
-func (provider *FSProvider) Boot(a AppManager) {
+func (provider *FilesystemProvider) Boot(a AppManager) {
 	//
 }

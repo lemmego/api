@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lemmego/api/fs"
+	"github.com/lemmego/api/session"
 	"html/template"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -17,12 +20,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lemmego/api/db"
-	"github.com/lemmego/api/fsys"
 	"github.com/lemmego/api/logger"
 	"github.com/lemmego/api/res"
 	"github.com/lemmego/api/shared"
-
 	inertia "github.com/romsar/gonertia"
 
 	"github.com/lemmego/api/req"
@@ -201,26 +201,6 @@ func (c *Context) RequestContext() context.Context {
 	return c.request.Context()
 }
 
-func (c *Context) FS() fsys.FS {
-	return c.app.FS()
-}
-
-func (c *Context) DB() *db.DB {
-	c.app.DbFunc(c.request.Context(), nil)
-	return c.app.DB()
-	//dbm, err := c.app.Resolve((*db.DB)(nil))
-	//if err != nil {
-	//	log.Println(fmt.Errorf("db: %w", err))
-	//	return nil
-	//}
-	//
-	//return dbm.(*db.DB)
-}
-
-func (c *Context) I() *inertia.Inertia {
-	return c.app.Inertia()
-}
-
 func (c *Context) Templ(status int, component templ.Component) error {
 	c.writer.Header().Set("content-type", "text/html")
 	c.writer.WriteHeader(status)
@@ -307,7 +287,8 @@ func (c *Context) Render(status int, tmplPath string, data *res.TemplateData) er
 }
 
 func (c *Context) Inertia(status int, filePath string, props map[string]any) error {
-	if c.app.Inertia() == nil {
+	var i *inertia.Inertia
+	if c.App().Service(&i) != nil {
 		return errors.New("inertia not enabled")
 	}
 
@@ -320,12 +301,13 @@ func (c *Context) Inertia(status int, filePath string, props map[string]any) err
 	}
 
 	c.writer.WriteHeader(status)
-	return c.App().Inertia().Render(c.ResponseWriter(), c.Request(), filePath, props)
+	return i.Render(c.ResponseWriter(), c.Request(), filePath, props)
 }
 
 func (c *Context) Redirect(status int, url string) error {
-	if c.I() != nil {
-		c.I().Redirect(c.ResponseWriter(), c.Request(), url)
+	var i *inertia.Inertia
+	if c.App().Service(&i) != nil {
+		i.Redirect(c.ResponseWriter(), c.Request(), url)
 		return nil
 	}
 
@@ -371,8 +353,9 @@ func (c *Context) WithInput() *Context {
 }
 
 func (c *Context) Back(status int) error {
-	if c.app.Inertia() != nil {
-		c.App().Inertia().Back(c.ResponseWriter(), c.Request(), status)
+	var i *inertia.Inertia
+	if c.App().Service(&i) == nil {
+		i.Back(c.ResponseWriter(), c.Request(), status)
 		return nil
 	}
 
@@ -457,9 +440,9 @@ func (c *Context) HasFile(key string) bool {
 	return err == nil
 }
 
-func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, error) {
-	if c.HasFile(key) {
-		file, header, err := c.FormFile(key)
+func (c *Context) Upload(uploadedFileName string, dir string, filename ...string) (*os.File, error) {
+	if c.HasFile(uploadedFileName) {
+		file, header, err := c.FormFile(uploadedFileName)
 
 		if err != nil {
 			return nil, fmt.Errorf("could not get form file: %w", err)
@@ -476,10 +459,20 @@ func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, 
 			header.Filename = filename[0]
 		}
 
-		return c.FS().Upload(file, header, dir)
+		var fm *fs.FilesystemManager
+
+		if err := c.App().Service(&fm); err != nil {
+			return nil, err
+		} else {
+			fss, err := fm.Get()
+			if err != nil {
+				return nil, err
+			}
+			return fss.Upload(file, header, dir)
+		}
 	}
 
-	return nil, nil
+	return nil, errors.New("file with the provided uploadedFileName does not exist")
 }
 
 func (c *Context) File(path string, headers ...map[string][]string) error {
@@ -514,11 +507,22 @@ func (c *Context) File(path string, headers ...map[string][]string) error {
 }
 
 func (c *Context) StorageFile(path string, headers ...map[string][]string) error {
-	if exists, err := c.FS().Exists(path); err != nil || !exists {
+	var fm *fs.FilesystemManager
+
+	if err := c.App().Service(&fm); err != nil {
+		return err
+	}
+
+	fss, err := fm.Get()
+	if err != nil {
+		return err
+	}
+
+	if exists, err := fss.Exists(path); err != nil || !exists {
 		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
 	}
 
-	file, err := c.FS().Open(path)
+	file, err := fss.Open(path)
 	defer func() {
 		err := file.Close()
 		if err != nil {
@@ -546,11 +550,22 @@ func (c *Context) StorageFile(path string, headers ...map[string][]string) error
 }
 
 func (c *Context) Download(path string, filename string) error {
-	if exists, err := c.FS().Exists(path); err != nil || !exists {
+	var fm *fs.FilesystemManager
+
+	if err := c.App().Service(&fm); err != nil {
+		return err
+	}
+
+	fss, err := fm.Get()
+	if err != nil {
+		return err
+	}
+
+	if exists, err := fss.Exists(path); err != nil || !exists {
 		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
 	}
 
-	file, err := c.FS().Open(path)
+	file, err := fss.Open(path)
 	defer func() {
 		err := file.Close()
 		if err != nil {
@@ -587,24 +602,59 @@ func (c *Context) Get(key string) any {
 }
 
 func (c *Context) PutSession(key string, value any) *Context {
-	c.app.Session().Put(c.Request().Context(), key, value)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return nil
+	}
+
+	sess.Put(c.Request().Context(), key, value)
 	return c
 }
 
 func (c *Context) PopSession(key string) any {
-	return c.app.Session().Pop(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return nil
+	}
+
+	return sess.Pop(c.Request().Context(), key)
 }
 
 func (c *Context) PopSessionString(key string) string {
-	return c.app.Session().PopString(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return ""
+	}
+
+	return sess.PopString(c.Request().Context(), key)
 }
 
 func (c *Context) GetSession(key string) any {
-	return c.app.Session().Get(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return nil
+	}
+
+	return sess.Get(c.Request().Context(), key)
 }
 
 func (c *Context) GetSessionString(key string) string {
-	return c.app.Session().GetString(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return ""
+	}
+
+	return sess.GetString(c.Request().Context(), key)
 }
 
 func (c *Context) Error(status int, err error) error {

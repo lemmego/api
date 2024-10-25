@@ -18,7 +18,6 @@ import (
 	"syscall"
 
 	"github.com/lemmego/api/config"
-	"github.com/lemmego/api/fsys"
 	"github.com/lemmego/api/logger"
 	"github.com/lemmego/api/req"
 	"github.com/lemmego/api/shared"
@@ -118,8 +117,9 @@ type Bootstrapper interface {
 	WithProviders(providers []Provider) Bootstrapper
 	WithConfig(c config.M) Bootstrapper
 	WithRoutes(routeCallback func(r Router)) Bootstrapper
-	Run()
+	PublishPackages()
 	HandleSignals()
+	Run()
 }
 
 type ServiceRegistrar interface {
@@ -138,11 +138,6 @@ type AppEngine interface {
 	Plugins() PluginRegistry
 	Config() *config.Config
 	Router() Router
-	Session() *session.Session
-	Inertia() *gonertia.Inertia
-	DB() *db.DB
-	DbFunc(c context.Context, config *db.Config) (*db.DB, error)
-	FS() fsys.FS
 }
 
 type AppBootstrapper interface {
@@ -215,8 +210,6 @@ type App struct {
 	serviceProviders []Provider
 	hooks            *AppHooks
 	router           *HTTPRouter
-	db               *db.DB
-	dbFunc           func(c context.Context, config *db.Config) (*db.DB, error)
 	routeCallback    func(r Router)
 }
 
@@ -235,6 +228,13 @@ type OptFunc func(opts *Options)
 //	}
 //}
 
+func (a *App) PublishPackages() {
+	if err := publishCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
 func (a *App) Plugin(plugin Plugin) Plugin {
 	return a.plugins.Get(plugin)
 }
@@ -249,50 +249,6 @@ func (a *App) Router() Router {
 
 func (a *App) Config() *config.Config {
 	return a.config
-}
-
-func (a *App) Session() *session.Session {
-	var sess *session.Session
-	if err := a.Service(&sess); err != nil {
-		panic(err)
-	}
-	return sess
-}
-
-//func (app *App) SetSession(session *session.Session) {
-//	app.session = session
-//}
-
-func (a *App) Inertia() *gonertia.Inertia {
-	var i *gonertia.Inertia
-	if err := a.Service(&i); err != nil {
-		panic(err)
-	}
-	return i
-}
-
-func (a *App) DB() *db.DB {
-	return a.db
-}
-
-func (a *App) DbFunc(c context.Context, config *db.Config) (*db.DB, error) {
-	return a.dbFunc(c, config)
-}
-
-func (a *App) SetDB(db *db.DB) {
-	a.db = db
-}
-
-func (a *App) SetDbFunc(dbFunc func(c context.Context, config *db.Config) (*db.DB, error)) {
-	a.dbFunc = dbFunc
-}
-
-func (a *App) FS() fsys.FS {
-	var fs fsys.FS
-	if err := a.Service(&fs); err != nil {
-		panic(err)
-	}
-	return fs
 }
 
 func WithPlugins(plugins map[PluginID]Plugin) OptFunc {
@@ -322,17 +278,17 @@ func New(optFuncs ...OptFunc) AppBootstrapper {
 
 	container := NewServiceContainer()
 	router := NewRouter()
-	config := config.NewConfig()
+	conf := config.NewConfig()
 
 	if opts.Config != nil {
-		config.SetConfigMap(opts.Config)
+		conf.SetConfigMap(opts.Config)
 	}
 
 	app := &App{
 		//Container:        container.NewContainer(),
 		Services:         container,
 		mu:               sync.Mutex{},
-		config:           config,
+		config:           conf,
 		plugins:          opts.Plugins,
 		serviceProviders: opts.ServiceProviders,
 		hooks:            opts.Hooks,
@@ -397,8 +353,7 @@ func (a *App) registerServiceProviders() {
 	providers := []Provider{
 		&DatabaseProvider{&ServiceProvider{App: a}},
 		&SessionProvider{&ServiceProvider{App: a}},
-		&AuthServiceProvider{&ServiceProvider{App: a}},
-		&FSProvider{&ServiceProvider{App: a}},
+		&FilesystemProvider{&ServiceProvider{App: a}},
 		&InertiaProvider{&ServiceProvider{App: a}},
 	}
 
@@ -442,6 +397,14 @@ func (a *App) registerRoutes() {
 		log.Printf("Registering route: %s %s, router: %p", route.Method, route.Path, route.router)
 		a.router.mux.HandleFunc(route.Method+" "+route.Path, func(w http.ResponseWriter, req *http.Request) {
 			makeHandlerFunc(a, route)(w, req)
+		})
+	}
+
+	// Register error endpoint if not overridden already
+	if !a.router.HasRoute("GET", "/error") {
+		a.router.Get("/error", func(c *Context) error {
+			err := c.PopSession("error").(string)
+			return c.HTML(500, []byte("<html><body><code>"+err+"</code></body></html>"))
 		})
 	}
 }
@@ -496,8 +459,10 @@ func makeHandlerFunc(app *App, route *Route) http.HandlerFunc {
 		}
 	}
 
-	if app.Inertia() != nil {
-		return app.Inertia().Middleware(http.HandlerFunc(fn)).ServeHTTP
+	var i *gonertia.Inertia
+
+	if app.Service(&i) == nil {
+		return i.Middleware(http.HandlerFunc(fn)).ServeHTTP
 	}
 
 	return fn
@@ -573,10 +538,17 @@ func (a *App) HandleSignals() {
 
 func (a *App) shutDown() {
 	log.Println("Shutting down application...")
-	dbName := a.db.Name()
-	err := a.db.Close()
-	if err != nil {
-		log.Fatal("Error closing database connection:", err)
+	var dbm *db.DatabaseManager
+	if err := a.Service(&dbm); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
-	log.Println("Database connection", dbName, "closed.")
+
+	for _, conn := range dbm.All() {
+		err := conn.Close()
+		if err != nil {
+			log.Fatal(fmt.Sprintf("Error closing database connection: %s", conn.ConnName()), err)
+		}
+		log.Println(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
+	}
 }

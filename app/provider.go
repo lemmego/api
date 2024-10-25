@@ -8,8 +8,8 @@ type Provider interface {
 type ServiceProvider struct {
 	App AppManager
 
-	routes       []*Route
-	publishables []*Publishable
+	routeCallback func(r Router)
+	publishables  []*Publishable
 }
 
 //func (p *ServiceProvider) Publishes(filePath string, content []byte) {
@@ -30,8 +30,8 @@ func (p *ServiceProvider) Publishables() []*Publishable {
 	return p.publishables
 }
 
-func (p *ServiceProvider) AddRoutes(routeRegistrar func(r Router) []*Route) {
-	p.routes = routeRegistrar(p.App.Router())
+func (p *ServiceProvider) AddRoutes(routeCallback func(r Router)) {
+	p.routeCallback = routeCallback
 }
 
 func (p *ServiceProvider) PublishMigration() []byte {

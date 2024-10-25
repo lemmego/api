@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"github.com/lemmego/api/db"
 )
 
@@ -9,36 +10,31 @@ type DatabaseProvider struct {
 }
 
 func (provider *DatabaseProvider) Register(a AppManager) {
+	defaultConnection := a.Config().Get("database.default")
 	dbConfig := &db.Config{
-		ConnName:   "pgsql",
-		Driver:     a.Config().Get("database.connections.pgsql.driver").(string),
-		Host:       a.Config().Get("database.connections.pgsql.host").(string),
-		Port:       a.Config().Get("database.connections.pgsql.port").(int),
-		Database:   a.Config().Get("database.connections.pgsql.database").(string),
-		User:       a.Config().Get("database.connections.pgsql.user").(string),
-		Password:   a.Config().Get("database.connections.pgsql.password").(string),
-		Params:     a.Config().Get("database.connections.pgsql.params").(string),
-		AutoCreate: a.Config().Get("database.connections.pgsql.auto_create", false).(bool),
+		ConnName:   defaultConnection.(string),
+		Driver:     a.Config().Get(fmt.Sprintf("database.connections.%s.driver", defaultConnection)).(string),
+		Host:       a.Config().Get(fmt.Sprintf("database.connections.%s.host", defaultConnection)).(string),
+		Port:       a.Config().Get(fmt.Sprintf("database.connections.%s.port", defaultConnection)).(int),
+		Database:   a.Config().Get(fmt.Sprintf("database.connections.%s.database", defaultConnection)).(string),
+		User:       a.Config().Get(fmt.Sprintf("database.connections.%s.user", defaultConnection)).(string),
+		Password:   a.Config().Get(fmt.Sprintf("database.connections.%s.password", defaultConnection)).(string),
+		Params:     a.Config().Get(fmt.Sprintf("database.connections.%s.params", defaultConnection)).(string),
+		AutoCreate: a.Config().Get(fmt.Sprintf("database.connections.%s.auto_create", defaultConnection)).(bool),
 	}
 
-	dbc, err := db.NewConnection(dbConfig).Open()
+	c, err := db.NewConnection(dbConfig).Open()
 
 	if err != nil {
 		panic(err)
 	}
-	provider.App.AddService(dbc)
-	//app.Bind((*db.DB)(nil), func() *db.DB {
-	//	return dbc
-	//})
-	//app.SetDB(dbc)
-	//app.SetDbFunc(func(c context.Context, config *db.Config) (*db.DB, error) {
-	//	if config == nil {
-	//		config = dbConfig
-	//	}
-	//	return db.NewConnection(config).
-	//		// WithForceCreateDb(). // Force create db if not exists
-	//		Open()
-	//})
+
+	dbm, err := db.NewDBManager().Add(c)
+
+	if err != nil {
+		panic(err)
+	}
+	provider.App.AddService(dbm)
 }
 
 func (provider *DatabaseProvider) Boot(a AppManager) {
