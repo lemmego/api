@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	_ "github.com/joho/godotenv/autoload"
-	"log/slog"
 )
 
 type M map[string]interface{}
@@ -26,11 +25,10 @@ func NewConfig() *Config {
 	}
 }
 
-// SetConfig sets the config map if none available, replaces otherwise.
+// SetConfigMap sets the config map if none available, replaces otherwise.
 func (c *Config) SetConfigMap(cm M) *Config {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	slog.Info("Setting config map", "config", cm)
 	c.m = cm
 	return c
 }
@@ -151,7 +149,7 @@ func deepCopy(in map[string]interface{}) map[string]interface{} {
 func MustEnv[T any](key string, fallback T) T {
 	value, exists := os.LookupEnv(key)
 	if !exists {
-		slog.Info(fmt.Sprintf("Using fallback value for key: %s", key), "fallback", fallback)
+		//slog.Info(fmt.Sprintf("Using fallback value for key: %s", key), "fallback", fallback)
 		return fallback
 	}
 

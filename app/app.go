@@ -13,16 +13,15 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
-	"strings"
 	"sync"
 	"syscall"
 
 	"github.com/lemmego/api/config"
-	"github.com/lemmego/api/logger"
 	"github.com/lemmego/api/req"
 	"github.com/lemmego/api/shared"
 
 	"github.com/lemmego/api/db"
+	"github.com/lemmego/migration/cmd"
 
 	"github.com/romsar/gonertia"
 	"github.com/spf13/cobra"
@@ -77,33 +76,7 @@ func (m M) Error() string {
 	return string(jsonEncoded)
 }
 
-type Publishable struct {
-	FilePath string
-	Content  []byte
-	Tag      string
-}
-
-func (p *Publishable) Publish() error {
-	filePath := p.FilePath
-
-	if !strings.HasSuffix(filePath, ".go") {
-		filePath = filePath + ".go"
-	}
-
-	if _, err := os.Stat(filePath); err != nil {
-		err := os.WriteFile(filePath, []byte(p.Content), 0644)
-		if err != nil {
-			return err
-		}
-		slog.Info("Copied file to %s\n", filePath)
-	} else {
-		return err
-	}
-	return nil
-}
-
 type Plugin interface {
-	Boot(a AppManager) error
 	InstallCommand() *cobra.Command
 	Commands() []*cobra.Command
 	EventListeners() map[string]func()
@@ -116,8 +89,8 @@ type Bootstrapper interface {
 	WithPlugins(plugins map[PluginID]Plugin) Bootstrapper
 	WithProviders(providers []Provider) Bootstrapper
 	WithConfig(c config.M) Bootstrapper
+	WithCommands(commands []Command) Bootstrapper
 	WithRoutes(routeCallback func(r Router)) Bootstrapper
-	PublishPackages()
 	HandleSignals()
 	Run()
 }
@@ -138,6 +111,7 @@ type AppEngine interface {
 	Plugins() PluginRegistry
 	Config() *config.Config
 	Router() Router
+	RunningInConsole() bool
 }
 
 type AppBootstrapper interface {
@@ -178,22 +152,22 @@ func (sc *ServiceContainer) Add(service interface{}) {
 }
 
 // Get retrieves a service from the container and populates the provided pointer
-func (sc *ServiceContainer) Get(output interface{}) error {
+func (sc *ServiceContainer) Get(service interface{}) error {
 	sc.mutex.RLock()
 	defer sc.mutex.RUnlock()
 
 	// Get the type of the pointer passed in
-	ptrType := reflect.TypeOf(output)
+	ptrType := reflect.TypeOf(service)
 	if ptrType.Kind() != reflect.Ptr || ptrType.Elem().Kind() != reflect.Ptr {
-		return fmt.Errorf("output must be a pointer to a pointer")
+		return fmt.Errorf("service must be a pointer to a pointer")
 	}
 
 	// Extract the element type (the actual service type)
 	serviceType := ptrType.Elem()
 
 	// Retrieve the service from the container
-	if service, exists := sc.services[serviceType]; exists {
-		reflect.ValueOf(output).Elem().Set(reflect.ValueOf(service))
+	if svc, exists := sc.services[serviceType]; exists {
+		reflect.ValueOf(service).Elem().Set(reflect.ValueOf(svc))
 		return nil
 	}
 
@@ -211,10 +185,13 @@ type App struct {
 	hooks            *AppHooks
 	router           *HTTPRouter
 	routeCallback    func(r Router)
+	commands         []Command
+	runningInConsole bool
 }
 
 type Options struct {
 	Config           config.M
+	Commands         []*cobra.Command
 	Plugins          map[PluginID]Plugin
 	ServiceProviders []Provider
 	Hooks            *AppHooks
@@ -228,7 +205,7 @@ type OptFunc func(opts *Options)
 //	}
 //}
 
-func (a *App) PublishPackages() {
+func (a *App) publishPackages() {
 	if err := publishCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -293,9 +270,14 @@ func New(optFuncs ...OptFunc) AppBootstrapper {
 		serviceProviders: opts.ServiceProviders,
 		hooks:            opts.Hooks,
 		router:           router,
+		runningInConsole: len(os.Args) > 1,
 	}
 
 	return app
+}
+
+func (a *App) RunningInConsole() bool {
+	return a.runningInConsole
 }
 
 // Service is a helper method to easily get a service
@@ -349,22 +331,138 @@ func (a *App) WithRoutes(routeCallback func(r Router)) Bootstrapper {
 	return a
 }
 
+// WithCommands register the commands
+func (a *App) WithCommands(commands []Command) Bootstrapper {
+	a.commands = commands
+	return a
+}
+
+// hasServiceProvider recursively checks if the inheritance tree has ServiceProvider or *ServiceProvider embedded.
+func (a *App) hasServiceProvider(obj interface{}) bool {
+	v := reflect.ValueOf(obj)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem() // Dereference pointer to access underlying struct
+	}
+
+	// Check if the type is a struct
+	if v.Kind() != reflect.Struct {
+		return false
+	}
+
+	// Define types for ServiceProvider and *ServiceProvider for comparison
+	serviceProviderType := reflect.TypeOf(ServiceProvider{})
+	ptrServiceProviderType := reflect.TypeOf(&ServiceProvider{})
+
+	// Traverse fields to check for direct or embedded initialized ServiceProvider
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		fieldType := v.Type().Field(i)
+
+		// Check if the field is of type ServiceProvider
+		if field.Type() == serviceProviderType {
+			return true // Struct ServiceProvider is embedded
+		}
+
+		// Check if the field is of type *ServiceProvider and is initialized (non-nil)
+		if field.Type() == ptrServiceProviderType && !field.IsNil() {
+			return true // Pointer ServiceProvider is embedded and initialized
+		}
+
+		// If the field is anonymous (embedded struct), recursively check it
+		if fieldType.Anonymous && field.Kind() == reflect.Struct {
+			if a.hasServiceProvider(field.Interface()) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// embedDefaultServiceProvider embeds &ServiceProvider{} if missing in the hierarchy.
+func (a *App) embedDefaultServiceProvider(obj interface{}) error {
+	v := reflect.ValueOf(obj).Elem()
+	serviceProviderType := reflect.TypeOf(&ServiceProvider{})
+
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		fieldType := v.Type().Field(i)
+
+		// Embed default &ServiceProvider{} if field is of type *ServiceProvider and nil
+		if field.Type() == serviceProviderType && field.IsNil() {
+			field.Set(reflect.ValueOf(&ServiceProvider{App: a, publishables: make([]*Publishable, 0)}))
+			return nil
+		}
+
+		// If the field is anonymous, recurse to check its fields
+		if fieldType.Anonymous && field.Kind() == reflect.Ptr && field.IsValid() && !field.IsNil() {
+			if err := a.embedDefaultServiceProvider(field.Interface()); err == nil {
+				return nil
+			}
+		}
+	}
+
+	return errors.New(fmt.Sprintf("no suitable field to embed ServiceProvider into %T", obj))
+}
+
+func (a *App) registerCommands() {
+	for _, command := range a.commands {
+		rootCmd.AddCommand(command(a))
+	}
+
+	rootCmd.AddCommand(publishCmd)
+
+	rootCmd.AddCommand(cmd.MigrateCmd)
+	//cmd.Execute()
+
+	if err := rootCmd.Execute(); err != nil {
+		panic(err)
+	}
+}
+
 func (a *App) registerServiceProviders() {
-	providers := []Provider{
+	providers := []interface{}{
 		&DatabaseProvider{&ServiceProvider{App: a}},
 		&SessionProvider{&ServiceProvider{App: a}},
 		&FilesystemProvider{&ServiceProvider{App: a}},
 		&InertiaProvider{&ServiceProvider{App: a}},
 	}
 
-	providers = append(providers, a.serviceProviders...)
-
-	for _, svc := range providers {
-		svc.Register(a)
+	for _, provider := range a.serviceProviders {
+		if !a.hasServiceProvider(provider) {
+			if err := a.embedDefaultServiceProvider(provider); err != nil {
+				panic(err)
+			}
+		}
+		providers = append(providers, provider)
 	}
 
 	for _, service := range providers {
-		service.Boot(a)
+		if val, ok := service.(Provider); ok {
+			val.Register(a)
+		}
+	}
+
+	for _, service := range providers {
+		if val, ok := service.(Provider); ok {
+			val.Boot(a)
+		}
+
+		if val, ok := service.(Publisher); ok {
+			if val.RouteCallback() != nil {
+				val.RouteCallback()(a.router)
+			}
+
+			if len(val.Commands()) > 0 {
+				a.commands = append(a.commands, val.Commands()...)
+			}
+
+			if len(val.Publishables()) > 0 {
+				if err := publish(a, val.Publishables()).Execute(); err != nil {
+					panic(err)
+				}
+			}
+		}
 	}
 }
 
@@ -383,18 +481,8 @@ func (a *App) registerRoutes() {
 
 	a.routeCallback(a.router)
 
-	for pluginID, plugin := range a.plugins {
-		for _, route := range plugin.Routes() {
-			if !a.router.HasRoute(route.Method, route.Path) {
-				log.Println("Adding route for the", pluginID, "plugin:", route.Method, route.Path)
-				a.router.addRoute(route.Method, route.Path, route.Handlers...)
-				//r.routes = append(r.routes, route)
-			}
-		}
-	}
-
 	for _, route := range a.router.routes {
-		log.Printf("Registering route: %s %s, router: %p", route.Method, route.Path, route.router)
+		slog.Debug(fmt.Sprintf("Registering route: %s %s", route.Method, route.Path))
 		a.router.mux.HandleFunc(route.Method+" "+route.Path, func(w http.ResponseWriter, req *http.Request) {
 			makeHandlerFunc(a, route)(w, req)
 		})
@@ -411,7 +499,7 @@ func (a *App) registerRoutes() {
 
 func makeHandlerFunc(app *App, route *Route) http.HandlerFunc {
 	fn := func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Handling request for route: %s %s", route.Method, route.Path)
+		slog.Debug("Handling request for route: %s %s", route.Method, route.Path)
 		if route.router == nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
@@ -419,14 +507,14 @@ func makeHandlerFunc(app *App, route *Route) http.HandlerFunc {
 
 		var sess *session.Session
 		if err := app.Service(&sess); err != nil {
-			log.Println(err)
+			slog.Error(err.Error())
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
 		token := sess.Token(r.Context())
 		if token != "" {
 			r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
-			log.Println("Current session ID: ", token)
+			slog.Debug("Current session ID: ", token)
 		}
 
 		allHandlers := append(append([]Handler{}, route.BeforeMiddleware...), route.Handlers...)
@@ -442,7 +530,7 @@ func makeHandlerFunc(app *App, route *Route) http.HandlerFunc {
 		}
 
 		if err := ctx.Next(); err != nil {
-			logger.V().Error(err.Error())
+			slog.Error(err.Error())
 			if errors.As(err, &shared.ValidationErrors{}) {
 				ctx.ValidationError(err)
 				return
@@ -496,18 +584,23 @@ func (a *App) Run() {
 
 	a.config.Set("app.name", "foo")
 
-	slog.Info("app will start using the following config:\n", "config", a.config.GetAll())
+	if !a.RunningInConsole() {
+		slog.Info("app will start using the following config:\n", "config", a.config.GetAll())
+	}
 
 	a.registerServiceProviders()
+
+	if a.RunningInConsole() {
+		a.registerCommands()
+	}
 
 	a.registerMiddlewares()
 
 	a.registerRoutes()
 
-	for _, plugin := range a.plugins {
-		if err := plugin.Boot(a); err != nil {
-			panic(err)
-		}
+	if a.RunningInConsole() {
+		a.shutDown()
+		os.Exit(0)
 	}
 
 	var sess *session.Session
@@ -515,7 +608,7 @@ func (a *App) Run() {
 		panic(err)
 	}
 
-	slog.Info(fmt.Sprintf("%s is running on port %d...", a.config.Get("app.name", "Lemmego"), a.config.Get("app.port", 3000)))
+	slog.Info(fmt.Sprintf("%s is running on port %d...\n\nPress Ctrl+C to close the server", a.config.Get("app.name", "Lemmego"), a.config.Get("app.port", 3000)))
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", a.config.Get("app.port", 3000)), sess.LoadAndSave(a.router)); err != nil {
 		panic(err)
 	}
@@ -537,7 +630,7 @@ func (a *App) HandleSignals() {
 }
 
 func (a *App) shutDown() {
-	log.Println("Shutting down application...")
+	slog.Debug("Shutting down application...")
 	var dbm *db.DatabaseManager
 	if err := a.Service(&dbm); err != nil {
 		fmt.Println(err)
@@ -549,6 +642,6 @@ func (a *App) shutDown() {
 		if err != nil {
 			log.Fatal(fmt.Sprintf("Error closing database connection: %s", conn.ConnName()), err)
 		}
-		log.Println(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
+		slog.Debug(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
 	}
 }

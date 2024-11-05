@@ -1,24 +1,70 @@
 package app
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/spf13/cobra"
+	"log/slog"
+	"os"
+	"slices"
 	"strings"
 )
 
-var publish string
+var tagsFlag string
 
-func init() {
-	publishCmd.PersistentFlags().StringVar(&publish, "publish", "", "Comma-separated tag names of package assets")
+var publishCmd = &cobra.Command{Use: "publish"}
+
+type Publishable struct {
+	FilePath string
+	Content  []byte
+	Tag      string
 }
 
-var publishCmd = &cobra.Command{
-	Use: "",
-	Run: func(cmd *cobra.Command, args []string) {
-		publishables := strings.Split(publish, ",")
-		fmt.Println("Publishing...")
-		for _, publishable := range publishables {
-			fmt.Println(publishable)
+func (p *Publishable) Publish() error {
+	filePath := p.FilePath
+
+	if _, err := os.Stat(filePath); err != nil {
+		// Define the substring to search for in the first line
+		substring := "//go:build"
+
+		// Find the index of the first newline character
+		index := bytes.IndexByte(p.Content, '\n')
+		if index != -1 {
+			// Check if the first line contains the substring
+			if bytes.Contains(p.Content[:index], []byte(substring)) {
+				// Slice the byte array to remove the first line, including the newline
+				p.Content = p.Content[index+1:]
+			}
 		}
-	},
+		err := os.WriteFile(filePath, p.Content, 0644)
+		if err != nil {
+			return err
+		}
+		slog.Info(fmt.Sprintf("Copied file to %s\n", filePath))
+	} else {
+		return err
+	}
+	return nil
+}
+
+func init() {
+	publishCmd.PersistentFlags().StringVar(&tagsFlag, "tags", "", "Comma-separated tag names of package assets")
+}
+
+func publish(a *App, publishables []*Publishable) *cobra.Command {
+	publishCmd.Run = func(cmd *cobra.Command, args []string) {
+		tags := []string{}
+		if tagsFlag != "" {
+			tags = strings.Split(tagsFlag, ",")
+		}
+
+		for _, publishable := range publishables {
+			if slices.Contains(tags, publishable.Tag) {
+				if err := publishable.Publish(); err != nil {
+					panic(err)
+				}
+			}
+		}
+	}
+	return publishCmd
 }

@@ -1,7 +1,8 @@
 package app
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"slices"
@@ -196,7 +197,7 @@ func (r *HTTPRouter) addRoute(method, pattern string, handlers ...Handler) *Rout
 		router:           r,
 	}
 	r.routes = append(r.routes, route)
-	log.Printf("Added route: %s %s, router: %p", method, fullPath, r)
+	slog.Debug(fmt.Sprintf("Added route: %s %s", method, fullPath))
 	return route
 }
 

@@ -34,7 +34,8 @@ func (provider *DatabaseProvider) Register(a AppManager) {
 	if err != nil {
 		panic(err)
 	}
-	provider.App.AddService(dbm)
+
+	a.AddService(dbm)
 }
 
 func (provider *DatabaseProvider) Boot(a AppManager) {

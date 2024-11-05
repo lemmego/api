@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lemmego/api/logger"
 	"github.com/lemmego/api/res"
 	"github.com/lemmego/api/shared"
 	inertia "github.com/romsar/gonertia"
@@ -451,7 +450,7 @@ func (c *Context) Upload(uploadedFileName string, dir string, filename ...string
 		defer func() {
 			err := file.Close()
 			if err != nil {
-				logger.V().Info("Form file could not be closed", "Error:", err)
+				slog.Info("Form file could not be closed", "Error:", err)
 			}
 		}()
 
@@ -484,7 +483,7 @@ func (c *Context) File(path string, headers ...map[string][]string) error {
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			logger.V().Info("File could not be closed", "Error:", err)
+			slog.Info("File could not be closed", "Error:", err)
 		}
 	}()
 
@@ -526,7 +525,7 @@ func (c *Context) StorageFile(path string, headers ...map[string][]string) error
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			logger.V().Info("File could not be closed", "Error:", err)
+			slog.Info("File could not be closed", "Error:", err)
 		}
 	}()
 
@@ -569,7 +568,7 @@ func (c *Context) Download(path string, filename string) error {
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			logger.V().Info("File could not be closed", "Error:", err)
+			slog.Info("File could not be closed", "Error:", err)
 		}
 	}()
 

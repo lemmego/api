@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	_ "github.com/joho/godotenv/autoload"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +18,20 @@ var verboseLoggerOptions = &slog.HandlerOptions{
 	AddSource: true,
 }
 
-var defaultLogger = slog.New(NewHandler(defaultLoggerOptions))
-var verboseLogger = slog.New(NewHandler(verboseLoggerOptions))
+var defaultLogger *slog.Logger
+var verboseLogger *slog.Logger
 
 func init() {
+	debugMode, _ := strconv.ParseBool(os.Getenv("APP_DEBUG"))
+
+	if debugMode {
+		defaultLoggerOptions.Level = slog.LevelDebug
+		verboseLoggerOptions.Level = slog.LevelDebug
+	}
+
+	defaultLogger = slog.New(NewHandler(defaultLoggerOptions))
+	verboseLogger = slog.New(NewHandler(verboseLoggerOptions))
+
 	slog.SetDefault(defaultLogger)
 }
 
@@ -91,7 +103,6 @@ func (h *LogHandler) computeAttrs(
 }
 
 func (h *LogHandler) Handle(ctx context.Context, r slog.Record) error {
-
 	var level string
 	levelAttr := slog.Attr{
 		Key:   slog.LevelKey,
@@ -105,7 +116,7 @@ func (h *LogHandler) Handle(ctx context.Context, r slog.Record) error {
 		level = levelAttr.Value.String() + ":"
 
 		if r.Level <= slog.LevelDebug {
-			level = colorize(lightGray, level)
+			level = colorize(green, level)
 		} else if r.Level <= slog.LevelInfo {
 			level = colorize(cyan, level)
 		} else if r.Level < slog.LevelWarn {
@@ -206,10 +217,10 @@ func NewHandler(opts *slog.HandlerOptions) *LogHandler {
 	}
 }
 
-func V() *slog.Logger {
+func Verbose() *slog.Logger {
 	return verboseLogger
 }
 
-func D() *slog.Logger {
+func Default() *slog.Logger {
 	return defaultLogger
 }
