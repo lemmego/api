@@ -6,13 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lemmego/api/session"
-	"github.com/lemmego/api/utils"
+	"github.com/romsar/gonertia"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"reflect"
 	"sync"
 	"syscall"
 
@@ -22,47 +21,34 @@ import (
 
 	"github.com/lemmego/api/db"
 	"github.com/lemmego/migration/cmd"
-
-	"github.com/romsar/gonertia"
-	"github.com/spf13/cobra"
 )
 
-type PluginID string
+// Global variable to hold the singleton instance
+var instance *Application
 
-type PluginRegistry map[PluginID]Plugin
+// Once ensures that the initialization function is called only once
+var once sync.Once
 
-// Get a plugin
-func (r PluginRegistry) Get(plugin Plugin) Plugin {
-	//nameSpace := fmt.Sprintf("%T", plugin)
-	nameSpace := utils.PkgName(plugin)
-
-	if val, ok := r[PluginID(nameSpace)]; ok {
-		return val
+// Get returns the single instance of the app
+func Get() App {
+	if instance == nil {
+		once.Do(func() {
+			instance = &Application{
+				mu:                        sync.Mutex{},
+				Services:                  newServiceContainer(),
+				router:                    newRouter(),
+				config:                    config.GetInstance(),
+				serviceRegistrarCallbacks: []func(a App) error{},
+				bootStrapperCallbacks:     []func(a App) error{},
+				runningInConsole:          len(os.Args) > 1,
+			}
+		})
 	}
-
-	return nil
+	return instance
 }
 
-// Has returns if a plugin with the specified id exists
-func (r PluginRegistry) Has(plugin Plugin) bool {
-	//nameSpace := fmt.Sprintf("%T", plugin)
-	nameSpace := utils.PkgName(plugin)
-
-	_, ok := r[PluginID(nameSpace)]
-
-	return ok
-}
-
-// Add a plugin
-func (r PluginRegistry) Add(plugin Plugin) {
-	if r.Has(plugin) {
-		panic(fmt.Sprintf("plugin %v already registered", plugin))
-	}
-
-	//nameSpace := fmt.Sprintf("%T", plugin)
-	nameSpace := utils.PkgName(plugin)
-
-	r[PluginID(nameSpace)] = plugin
+func init() {
+	_ = Get()
 }
 
 type M map[string]any
@@ -76,21 +62,10 @@ func (m M) Error() string {
 	return string(jsonEncoded)
 }
 
-type Plugin interface {
-	InstallCommand() *cobra.Command
-	Commands() []*cobra.Command
-	EventListeners() map[string]func()
-	Publishables() []*Publishable
-	Middlewares() []HTTPMiddleware
-	Routes() []*Route
-}
-
 type Bootstrapper interface {
-	WithPlugins(plugins map[PluginID]Plugin) Bootstrapper
-	WithProviders(providers []Provider) Bootstrapper
 	WithConfig(c config.M) Bootstrapper
 	WithCommands(commands []Command) Bootstrapper
-	WithRoutes(routeCallback func(r Router)) Bootstrapper
+	WithRoutes(routeCallback RouteCallback) Bootstrapper
 	HandleSignals()
 	Run()
 }
@@ -100,144 +75,72 @@ type ServiceRegistrar interface {
 	AddService(serviceType interface{})
 }
 
-type AppManager interface {
-	//container.ServiceContainer
+type AppCore interface {
+	Config() config.Configuration
+	Router() Router
+	RunningInConsole() bool
+	AddCommands(commands []Command)
+}
+
+type App interface {
 	ServiceRegistrar
-	AppEngine
+	AppCore
 }
 
 type AppEngine interface {
-	Plugin(Plugin) Plugin
-	Plugins() PluginRegistry
-	Config() *config.Config
-	Router() Router
-	RunningInConsole() bool
-}
-
-type AppBootstrapper interface {
 	Bootstrapper
 	ServiceRegistrar
-	AppEngine
+	AppCore
 }
 
-type AppHooks struct {
-	BeforeStart func()
-	AfterStart  func()
-}
-
-// ServiceContainer holds all the application's dependencies
-type ServiceContainer struct {
-	services map[reflect.Type]interface{}
-	mutex    sync.RWMutex
-}
-
-// NewServiceContainer creates a new ServiceContainer
-func NewServiceContainer() *ServiceContainer {
-	return &ServiceContainer{
-		services: make(map[reflect.Type]interface{}),
-	}
-}
-
-// Add adds a service to the container
-func (sc *ServiceContainer) Add(service interface{}) {
-	sc.mutex.Lock()
-	defer sc.mutex.Unlock()
-	t := reflect.TypeOf(service)
-	// Store by pointer type if it's a pointer, otherwise by value type
-	if t.Kind() == reflect.Ptr {
-		sc.services[t] = service
-	} else {
-		sc.services[reflect.PointerTo(t)] = service
-	}
-}
-
-// Get retrieves a service from the container and populates the provided pointer
-func (sc *ServiceContainer) Get(service interface{}) error {
-	sc.mutex.RLock()
-	defer sc.mutex.RUnlock()
-
-	// Get the type of the pointer passed in
-	ptrType := reflect.TypeOf(service)
-	if ptrType.Kind() != reflect.Ptr || ptrType.Elem().Kind() != reflect.Ptr {
-		return fmt.Errorf("service must be a pointer to a pointer")
-	}
-
-	// Extract the element type (the actual service type)
-	serviceType := ptrType.Elem()
-
-	// Retrieve the service from the container
-	if svc, exists := sc.services[serviceType]; exists {
-		reflect.ValueOf(service).Elem().Set(reflect.ValueOf(svc))
-		return nil
-	}
-
-	return fmt.Errorf("service of type %v not found", serviceType)
-}
-
-// App is the main application
-type App struct {
+// Application is the main application
+type Application struct {
 	//*container.Container
-	Services         *ServiceContainer
-	mu               sync.Mutex
-	config           *config.Config
-	plugins          PluginRegistry
-	serviceProviders []Provider
-	hooks            *AppHooks
-	router           *HTTPRouter
-	routeCallback    func(r Router)
-	commands         []Command
-	runningInConsole bool
+	Services                  *ServiceContainer
+	mu                        sync.Mutex
+	config                    config.Configuration
+	router                    *HTTPRouter
+	routeCallbacks            []RouteCallback
+	serviceRegistrarCallbacks []func(a App) error
+	bootStrapperCallbacks     []func(a App) error
+	commands                  []Command
+	runningInConsole          bool
 }
 
 type Options struct {
-	Config           config.M
-	Commands         []*cobra.Command
-	Plugins          map[PluginID]Plugin
-	ServiceProviders []Provider
-	Hooks            *AppHooks
+	Config   config.M
+	Commands []Command
+	Routes   RouteCallback
 }
 
 type OptFunc func(opts *Options)
 
-//func (app *App) Reset() {
-//	if app.container != nil {
-//		app.container.Clear()
-//	}
-//}
-
-func (a *App) publishPackages() {
-	if err := publishCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+func RegisterService(registrar func(a App) error) {
+	if instance == nil {
+		Get()
 	}
+
+	instance.serviceRegistrarCallbacks = append(instance.serviceRegistrarCallbacks, registrar)
 }
 
-func (a *App) Plugin(plugin Plugin) Plugin {
-	return a.plugins.Get(plugin)
+func BootService(bootstrapper func(a App) error) {
+	if instance == nil {
+		Get()
+	}
+
+	instance.bootStrapperCallbacks = append(instance.bootStrapperCallbacks, bootstrapper)
 }
 
-func (a *App) Plugins() PluginRegistry {
-	return a.plugins
-}
-
-func (a *App) Router() Router {
+func (a *Application) Router() Router {
 	return a.router
 }
 
-func (a *App) Config() *config.Config {
+func (a *Application) Config() config.Configuration {
 	return a.config
 }
 
-func WithPlugins(plugins map[PluginID]Plugin) OptFunc {
-	return func(opts *Options) {
-		opts.Plugins = plugins
-	}
-}
-
-func WithProviders(providers []Provider) OptFunc {
-	return func(opts *Options) {
-		opts.ServiceProviders = providers
-	}
+func (a *Application) AddCommands(commands []Command) {
+	a.commands = append(a.commands, commands...)
 }
 
 func WithConfig(config config.M) OptFunc {
@@ -246,166 +149,75 @@ func WithConfig(config config.M) OptFunc {
 	}
 }
 
-func New(optFuncs ...OptFunc) AppBootstrapper {
+func WithCommands(commands []Command) OptFunc {
+	return func(opts *Options) {
+		opts.Commands = commands
+	}
+}
+
+func WithRoutes(routes RouteCallback) OptFunc {
+	return func(opts *Options) {
+		opts.Routes = routes
+	}
+}
+
+func Configure(optFuncs ...OptFunc) AppEngine {
 	opts := &Options{}
 
 	for _, optFunc := range optFuncs {
 		optFunc(opts)
 	}
 
-	container := NewServiceContainer()
-	router := NewRouter()
-	conf := config.NewConfig()
+	i := Get().(*Application)
 
 	if opts.Config != nil {
-		conf.SetConfigMap(opts.Config)
+		i.config.SetConfigMap(opts.Config)
 	}
 
-	app := &App{
-		//Container:        container.NewContainer(),
-		Services:         container,
-		mu:               sync.Mutex{},
-		config:           conf,
-		plugins:          opts.Plugins,
-		serviceProviders: opts.ServiceProviders,
-		hooks:            opts.Hooks,
-		router:           router,
-		runningInConsole: len(os.Args) > 1,
+	if opts.Commands != nil && len(opts.Commands) > 0 {
+		i.commands = append(i.commands, opts.Commands...)
 	}
 
-	return app
+	if opts.Routes != nil {
+		i.routeCallbacks = append(i.routeCallbacks, opts.Routes)
+	}
+
+	return i
 }
 
-func (a *App) RunningInConsole() bool {
+func (a *Application) RunningInConsole() bool {
 	return a.runningInConsole
 }
 
 // Service is a helper method to easily get a service
-func (a *App) Service(serviceType interface{}) error {
+func (a *Application) Service(serviceType interface{}) error {
 	return a.Services.Get(serviceType)
 }
 
 // AddService is a helper method to easily add a service
-func (a *App) AddService(serviceType interface{}) {
+func (a *Application) AddService(serviceType interface{}) {
 	a.Services.Add(serviceType)
 }
 
-// AddPlugin adds a plugin to the list of plugins
-func (a *App) AddPlugin(plugin Plugin) {
-	if a.plugins == nil {
-		a.plugins = map[PluginID]Plugin{}
-	}
-
-	a.plugins.Add(plugin)
-}
-
-// WithPlugins appends the given map of plugins to the existing plugins
-func (a *App) WithPlugins(plugins map[PluginID]Plugin) Bootstrapper {
-	for _, plugin := range plugins {
-		a.AddPlugin(plugin)
-	}
-
-	return a
-}
-
-// AddProvider adds a service provider to the list of providers
-func (a *App) AddProvider(provider Provider) {
-	a.serviceProviders = append(a.serviceProviders, provider)
-}
-
-// WithProviders appends the given slice to the existing providers
-func (a *App) WithProviders(providers []Provider) Bootstrapper {
-	a.serviceProviders = append(a.serviceProviders, providers...)
-	return a
-}
-
 // WithConfig sets the config map to the current config instance
-func (a *App) WithConfig(c config.M) Bootstrapper {
+func (a *Application) WithConfig(c config.M) Bootstrapper {
 	a.config.SetConfigMap(c)
 	return a
 }
 
 // WithRoutes calls the provided callback and registers the routes
-func (a *App) WithRoutes(routeCallback func(r Router)) Bootstrapper {
-	a.routeCallback = routeCallback
+func (a *Application) WithRoutes(routeCallback RouteCallback) Bootstrapper {
+	a.routeCallbacks = append(a.routeCallbacks, routeCallback)
 	return a
 }
 
 // WithCommands register the commands
-func (a *App) WithCommands(commands []Command) Bootstrapper {
+func (a *Application) WithCommands(commands []Command) Bootstrapper {
 	a.commands = commands
 	return a
 }
 
-// hasServiceProvider recursively checks if the inheritance tree has ServiceProvider or *ServiceProvider embedded.
-func (a *App) hasServiceProvider(obj interface{}) bool {
-	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem() // Dereference pointer to access underlying struct
-	}
-
-	// Check if the type is a struct
-	if v.Kind() != reflect.Struct {
-		return false
-	}
-
-	// Define types for ServiceProvider and *ServiceProvider for comparison
-	serviceProviderType := reflect.TypeOf(ServiceProvider{})
-	ptrServiceProviderType := reflect.TypeOf(&ServiceProvider{})
-
-	// Traverse fields to check for direct or embedded initialized ServiceProvider
-	for i := 0; i < v.NumField(); i++ {
-		field := v.Field(i)
-		fieldType := v.Type().Field(i)
-
-		// Check if the field is of type ServiceProvider
-		if field.Type() == serviceProviderType {
-			return true // Struct ServiceProvider is embedded
-		}
-
-		// Check if the field is of type *ServiceProvider and is initialized (non-nil)
-		if field.Type() == ptrServiceProviderType && !field.IsNil() {
-			return true // Pointer ServiceProvider is embedded and initialized
-		}
-
-		// If the field is anonymous (embedded struct), recursively check it
-		if fieldType.Anonymous && field.Kind() == reflect.Struct {
-			if a.hasServiceProvider(field.Interface()) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// embedDefaultServiceProvider embeds &ServiceProvider{} if missing in the hierarchy.
-func (a *App) embedDefaultServiceProvider(obj interface{}) error {
-	v := reflect.ValueOf(obj).Elem()
-	serviceProviderType := reflect.TypeOf(&ServiceProvider{})
-
-	for i := 0; i < v.NumField(); i++ {
-		field := v.Field(i)
-		fieldType := v.Type().Field(i)
-
-		// Embed default &ServiceProvider{} if field is of type *ServiceProvider and nil
-		if field.Type() == serviceProviderType && field.IsNil() {
-			field.Set(reflect.ValueOf(&ServiceProvider{App: a, publishables: make([]*Publishable, 0)}))
-			return nil
-		}
-
-		// If the field is anonymous, recurse to check its fields
-		if fieldType.Anonymous && field.Kind() == reflect.Ptr && field.IsValid() && !field.IsNil() {
-			if err := a.embedDefaultServiceProvider(field.Interface()); err == nil {
-				return nil
-			}
-		}
-	}
-
-	return errors.New(fmt.Sprintf("no suitable field to embed ServiceProvider into %T", obj))
-}
-
-func (a *App) registerCommands() {
+func (a *Application) registerCommands() {
 	for _, command := range a.commands {
 		rootCmd.AddCommand(command(a))
 	}
@@ -413,73 +225,35 @@ func (a *App) registerCommands() {
 	rootCmd.AddCommand(publishCmd)
 
 	rootCmd.AddCommand(cmd.MigrateCmd)
-	//cmd.Execute()
 
 	if err := rootCmd.Execute(); err != nil {
 		panic(err)
 	}
 }
 
-func (a *App) registerServiceProviders() {
-	providers := []interface{}{
-		&DatabaseProvider{&ServiceProvider{App: a}},
-		&SessionProvider{&ServiceProvider{App: a}},
-		&FilesystemProvider{&ServiceProvider{App: a}},
-		&InertiaProvider{&ServiceProvider{App: a}},
-	}
-
-	for _, provider := range a.serviceProviders {
-		if !a.hasServiceProvider(provider) {
-			if err := a.embedDefaultServiceProvider(provider); err != nil {
-				panic(err)
-			}
-		}
-		providers = append(providers, provider)
-	}
-
-	for _, service := range providers {
-		if val, ok := service.(Provider); ok {
-			val.Register(a)
+func (a *Application) registerServiceProviders() {
+	for _, callback := range a.serviceRegistrarCallbacks {
+		if err := callback(a); err != nil {
+			panic(err)
 		}
 	}
 
-	for _, service := range providers {
-		if val, ok := service.(Provider); ok {
-			val.Boot(a)
-		}
-
-		if val, ok := service.(Publisher); ok {
-			if val.RouteCallback() != nil {
-				val.RouteCallback()(a.router)
-			}
-
-			if len(val.Commands()) > 0 {
-				a.commands = append(a.commands, val.Commands()...)
-			}
-
-			if len(val.Publishables()) > 0 {
-				if err := publish(a, val.Publishables()).Execute(); err != nil {
-					panic(err)
-				}
-			}
+	for _, callback := range a.bootStrapperCallbacks {
+		if err := callback(a); err != nil {
+			panic(err)
 		}
 	}
+	return
 }
 
-func (a *App) registerMiddlewares() {
-	for _, plugin := range a.plugins {
-		for _, mw := range plugin.Middlewares() {
-			a.router.Use(mw)
-		}
-	}
+func (a *Application) registerMiddlewares() {
+	// Register global middleware
 }
 
-func (a *App) registerRoutes() {
-	a.router.Handle("GET /static/*", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-
-	a.router.Handle("GET /public/*", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
-
-	a.routeCallback(a.router)
+func (a *Application) registerRoutes() {
+	for _, cb := range a.routeCallbacks {
+		cb(a.router)
+	}
 
 	for _, route := range a.router.routes {
 		slog.Debug(fmt.Sprintf("Registering route: %s %s", route.Method, route.Path))
@@ -492,12 +266,15 @@ func (a *App) registerRoutes() {
 	if !a.router.HasRoute("GET", "/error") {
 		a.router.Get("/error", func(c *Context) error {
 			err := c.PopSession("error").(string)
-			return c.HTML(500, []byte("<html><body><code>"+err+"</code></body></html>"))
+			return c.Status(500).HTML([]byte("<html><body><code>" + err + "</code></body></html>"))
 		})
 	}
+
+	a.router.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	a.router.mux.Handle("GET /public/", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
 }
 
-func makeHandlerFunc(app *App, route *Route) http.HandlerFunc {
+func makeHandlerFunc(app *Application, route *Route) http.HandlerFunc {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("Handling request for route: %s %s", route.Method, route.Path)
 		if route.router == nil {
@@ -530,7 +307,6 @@ func makeHandlerFunc(app *App, route *Route) http.HandlerFunc {
 		}
 
 		if err := ctx.Next(); err != nil {
-			slog.Error(err.Error())
 			if errors.As(err, &shared.ValidationErrors{}) {
 				ctx.ValidationError(err)
 				return
@@ -547,16 +323,16 @@ func makeHandlerFunc(app *App, route *Route) http.HandlerFunc {
 		}
 	}
 
-	var i *gonertia.Inertia
+	i := &gonertia.Inertia{}
 
-	if app.Service(&i) == nil {
+	if app.Service(i) == nil {
 		return i.Middleware(http.HandlerFunc(fn)).ServeHTTP
 	}
 
 	return fn
 }
 
-func (a *App) Run() {
+func (a *Application) Run() {
 	// Check if the main config is nil
 	if a.config == nil {
 		panic("main configuration is missing")
@@ -581,8 +357,6 @@ func (a *App) Run() {
 	if a.config.Get("filesystems") == nil {
 		panic("filesystem configuration is missing")
 	}
-
-	a.config.Set("app.name", "foo")
 
 	if !a.RunningInConsole() {
 		slog.Info("app will start using the following config:\n", "config", a.config.GetAll())
@@ -614,7 +388,7 @@ func (a *App) Run() {
 	}
 }
 
-func (a *App) HandleSignals() {
+func (a *Application) HandleSignals() {
 	signalChannel := make(chan os.Signal, 1)
 	signal.Notify(signalChannel,
 		syscall.SIGINT,
@@ -629,19 +403,18 @@ func (a *App) HandleSignals() {
 	}
 }
 
-func (a *App) shutDown() {
-	slog.Debug("Shutting down application...")
-	var dbm *db.DatabaseManager
-	if err := a.Service(&dbm); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+func (a *Application) shutDown() {
+	if !a.RunningInConsole() {
+		slog.Info("Shutting down application...")
 	}
 
-	for _, conn := range dbm.All() {
+	for _, conn := range db.DM().All() {
 		err := conn.Close()
 		if err != nil {
 			log.Fatal(fmt.Sprintf("Error closing database connection: %s", conn.ConnName()), err)
 		}
-		slog.Debug(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
+		if !a.RunningInConsole() {
+			slog.Info(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
+		}
 	}
 }

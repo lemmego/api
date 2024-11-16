@@ -19,6 +19,8 @@ type Middleware func(next Handler) Handler
 
 type HTTPMiddleware func(http.Handler) http.Handler
 
+type RouteCallback func(r Router)
+
 type Route struct {
 	Method           string
 	Path             string
@@ -95,8 +97,8 @@ func (g *Group) Delete(pattern string, handlers ...Handler) *Route {
 	return g.addRoute(http.MethodDelete, pattern, handlers...)
 }
 
-// NewRouter creates a new HTTPRouter-based router
-func NewRouter() *HTTPRouter {
+// newRouter creates a new HTTPRouter-based router
+func newRouter() *HTTPRouter {
 	return &HTTPRouter{
 		routes:           []*Route{},
 		httpMiddlewares:  []HTTPMiddleware{},

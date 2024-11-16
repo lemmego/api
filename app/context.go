@@ -39,9 +39,10 @@ func init() {
 
 type Context struct {
 	sync.Mutex
-	app     AppManager
+	app     App
 	request *http.Request
 	writer  http.ResponseWriter
+	status  int
 
 	handlers []Handler
 	index    int
@@ -49,14 +50,11 @@ type Context struct {
 
 type R struct {
 	Status       int
-	TemplateName string
-	InertiaView  string
 	Payload      M
+	TemplateView string
+	TemplView    string
+	InertiaView  string
 	RedirectTo   string
-}
-
-func (c *Context) Plugin(plugin Plugin) Plugin {
-	return c.App().Plugin(plugin)
 }
 
 func (c *Context) Next() error {
@@ -153,38 +151,40 @@ func (c *Context) GetInput() any {
 }
 
 func (c *Context) Respond(r *R) error {
-	if r.Status == 0 {
-		r.Status = http.StatusOK
-	}
-
-	if c.WantsJSON() {
-		if r.Payload != nil {
-			return c.JSON(r.Status, r.Payload)
+	if r.RedirectTo != "" {
+		if r.Status == 0 {
+			r.Status = http.StatusFound
 		}
+		return c.Status(r.Status).Redirect(r.RedirectTo)
 	}
 
 	if r.InertiaView != "" {
-		return c.Inertia(r.Status, r.InertiaView, r.Payload)
+		if r.Status == 0 {
+			r.Status = http.StatusOK
+		}
+		return c.Status(r.Status).Inertia(r.InertiaView, r.Payload)
 	}
 
-	if r.RedirectTo != "" {
-		return c.Redirect(http.StatusFound, r.RedirectTo)
-	}
+	if r.TemplateView != "" {
+		templateData := &res.TemplateData{}
 
-	templateData := &res.TemplateData{}
+		if r.Payload != nil {
+			templateData.Data = r.Payload
+		}
+		return c.Render(r.TemplateView, templateData)
+	}
 
 	if r.Payload != nil {
-		templateData.Data = r.Payload
-	}
-
-	if r.TemplateName != "" {
-		return c.Render(r.Status, r.TemplateName, templateData)
+		if r.Status == 0 {
+			r.Status = http.StatusOK
+		}
+		return c.Status(r.Status).JSON(r.Payload)
 	}
 
 	return nil
 }
 
-func (c *Context) App() AppManager {
+func (c *Context) App() App {
 	return c.app
 }
 
@@ -200,10 +200,18 @@ func (c *Context) RequestContext() context.Context {
 	return c.request.Context()
 }
 
-func (c *Context) Templ(status int, component templ.Component) error {
+func (c *Context) Templ(component templ.Component) error {
 	c.writer.Header().Set("content-type", "text/html")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	return component.Render(c.Request().Context(), c.writer)
+}
+
+func (c *Context) Status(status int) *Context {
+	c.status = status
+	return c
 }
 
 func (c *Context) GetHeader(key string) string {
@@ -222,11 +230,14 @@ func (c *Context) WantsHTML() bool {
 	return req.WantsHTML(c.request)
 }
 
-func (c *Context) JSON(status int, body M) error {
+func (c *Context) JSON(body M) error {
 	// TODO: Check if header is already sent
 	response, _ := json.Marshal(body)
 	c.writer.Header().Set("content-Type", "application/json")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	_, err := c.writer.Write(response)
 	return err
 }
@@ -258,24 +269,33 @@ func (c *Context) resolveTemplateData(data *res.TemplateData) *res.TemplateData 
 	return data
 }
 
-func (c *Context) Text(status int, body []byte) error {
+func (c *Context) Text(body []byte) error {
 	c.writer.Header().Set("content-type", "text/plain")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	_, err := c.writer.Write(body)
 	return err
 }
 
-func (c *Context) HTML(status int, body []byte) error {
+func (c *Context) HTML(body []byte) error {
 	c.writer.Header().Set("content-type", "text/html")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	_, err := c.writer.Write(body)
 	return err
 }
 
-func (c *Context) Render(status int, tmplPath string, data *res.TemplateData) error {
+func (c *Context) Render(tmplPath string, data *res.TemplateData) error {
 	data = c.resolveTemplateData(data)
 	c.writer.Header().Set("content-type", "text/html")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	data.FuncMap = template.FuncMap{
 		"csrf": func() template.HTML {
 			token := c.GetSessionString("_token")
@@ -285,7 +305,7 @@ func (c *Context) Render(status int, tmplPath string, data *res.TemplateData) er
 	return res.RenderTemplate(c.writer, tmplPath, data)
 }
 
-func (c *Context) Inertia(status int, filePath string, props map[string]any) error {
+func (c *Context) Inertia(filePath string, props map[string]any) error {
 	var i *inertia.Inertia
 	if c.App().Service(&i) != nil {
 		return errors.New("inertia not enabled")
@@ -299,11 +319,14 @@ func (c *Context) Inertia(status int, filePath string, props map[string]any) err
 		props["errors"] = errs
 	}
 
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	return i.Render(c.ResponseWriter(), c.Request(), filePath, props)
 }
 
-func (c *Context) Redirect(status int, url string) error {
+func (c *Context) Redirect(url string) error {
 	var i *inertia.Inertia
 	if c.App().Service(&i) != nil {
 		i.Redirect(c.ResponseWriter(), c.Request(), url)
@@ -311,7 +334,10 @@ func (c *Context) Redirect(status int, url string) error {
 	}
 
 	c.writer.Header().Set("Location", url)
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusFound
+	}
+	c.writer.WriteHeader(c.status)
 	return nil
 }
 
@@ -351,14 +377,18 @@ func (c *Context) WithInput() *Context {
 	return c
 }
 
-func (c *Context) Back(status int) error {
+func (c *Context) Back() error {
+	if c.status == 0 {
+		c.status = http.StatusFound
+	}
+
 	var i *inertia.Inertia
 	if c.App().Service(&i) == nil {
-		i.Back(c.ResponseWriter(), c.Request(), status)
+		i.Back(c.ResponseWriter(), c.Request(), c.status)
 		return nil
 	}
 
-	return c.Redirect(status, c.Referer())
+	return c.Redirect(c.Referer())
 }
 
 func (c *Context) Referer() string {
@@ -658,13 +688,13 @@ func (c *Context) GetSessionString(key string) string {
 
 func (c *Context) Error(status int, err error) error {
 	if c.WantsJSON() {
-		return c.JSON(status, M{"message": err.Error()})
+		return c.JSON(M{"message": err.Error()})
 	}
 	c.writer.WriteHeader(status)
 	if _, e := c.writer.Write([]byte(err.Error())); e != nil {
 		return err
 	}
-	return err
+	return nil
 }
 
 func (c *Context) ValidationError(err error) error {
@@ -675,10 +705,10 @@ func (c *Context) ValidationError(err error) error {
 	}
 
 	if c.WantsJSON() || c.Referer() == "" {
-		return c.JSON(http.StatusUnprocessableEntity, M{"errors": err})
+		return c.Status(http.StatusUnprocessableEntity).JSON(M{"errors": err})
 	}
 
-	return c.WithErrors(err.(shared.ValidationErrors)).WithInput().Back(http.StatusFound)
+	return c.WithErrors(err.(shared.ValidationErrors)).WithInput().Back()
 }
 
 func (c *Context) InternalServerError(err error) error {

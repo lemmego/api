@@ -40,7 +40,6 @@ func (p *Publishable) Publish() error {
 		if err != nil {
 			return err
 		}
-		slog.Info(fmt.Sprintf("Copied file to %s\n", filePath))
 	} else {
 		return err
 	}
@@ -51,7 +50,7 @@ func init() {
 	publishCmd.PersistentFlags().StringVar(&tagsFlag, "tags", "", "Comma-separated tag names of package assets")
 }
 
-func publish(a *App, publishables []*Publishable) *cobra.Command {
+func publish(a *Application, publishables []*Publishable) *cobra.Command {
 	publishCmd.Run = func(cmd *cobra.Command, args []string) {
 		tags := []string{}
 		if tagsFlag != "" {
@@ -59,7 +58,13 @@ func publish(a *App, publishables []*Publishable) *cobra.Command {
 		}
 
 		for _, publishable := range publishables {
-			if slices.Contains(tags, publishable.Tag) {
+			if len(tags) > 0 && slices.Contains(tags, publishable.Tag) {
+				slog.Info(fmt.Sprintf("Publishing assets with tag %s", publishable.Tag))
+				if err := publishable.Publish(); err != nil {
+					panic(err)
+				}
+				slog.Info(fmt.Sprintf("Published file to %s", publishable.FilePath))
+			} else {
 				if err := publishable.Publish(); err != nil {
 					panic(err)
 				}

@@ -5,10 +5,15 @@ go 1.22.7
 toolchain go1.23.2
 
 require (
+	dario.cat/mergo v1.0.1
 	github.com/a-h/templ v0.2.771
+	github.com/alexedwards/scs/redisstore v0.0.0-20240316134038-7e11d57e8885
 	github.com/alexedwards/scs/v2 v2.8.0
 	github.com/ggicci/httpin v0.19.0
+	github.com/go-chi/chi/v5 v5.0.11
+	github.com/go-chi/httplog/v2 v2.1.1
 	github.com/golang/gddo v0.0.0-20210115222349-20d68f94ee1f
+	github.com/gomodule/redigo v1.9.2
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lemmego/fsys v0.0.0-20241023123145-f7699143d54c

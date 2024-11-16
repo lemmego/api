@@ -9,12 +9,11 @@ import (
 )
 
 type FilesystemManager struct {
-	disks  map[string]fsys.FS
-	config *config.Config
+	disks map[string]fsys.FS
 }
 
-func NewFilesystemManager(c *config.Config) *FilesystemManager {
-	return &FilesystemManager{disks: map[string]fsys.FS{}, config: c}
+func NewFilesystemManager() *FilesystemManager {
+	return &FilesystemManager{disks: map[string]fsys.FS{}}
 }
 
 func (fm *FilesystemManager) Get(diskName ...string) (fsys.FS, error) {
@@ -31,24 +30,24 @@ func (fm *FilesystemManager) Get(diskName ...string) (fsys.FS, error) {
 	}
 
 	if _, ok := fm.disks[name]; !ok {
-		fm.disks[name] = Resolve(name, fm.config)
+		fm.disks[name] = Resolve(name)
 	}
 
 	return fm.disks[name], nil
 }
 
-func Resolve(name string, c *config.Config) fsys.FS {
-	if conf, ok := c.Get("filesystems.disks").(config.M)[name].(config.M); ok {
+func Resolve(name string) fsys.FS {
+	if conf, ok := config.Get("filesystems.disks").(config.M)[name].(config.M); ok {
 		switch conf["driver"] {
 		case "local":
-			return fsys.NewLocalStorage(c.Get(fmt.Sprintf("filesystems.disks.%s.path", name)).(string))
+			return fsys.NewLocalStorage(config.Get(fmt.Sprintf("filesystems.disks.%s.path", name)).(string))
 		case "s3":
 			fs, err := fsys.NewS3Storage(
-				c.Get(fmt.Sprintf("filesystems.disks.%s.bucket", name)).(string),
-				c.Get(fmt.Sprintf("filesystems.disks.%s.region", name)).(string),
-				c.Get(fmt.Sprintf("filesystems.disks.%s.key", name)).(string),
-				c.Get(fmt.Sprintf("filesystems.disks.%s.secret", name)).(string),
-				c.Get(fmt.Sprintf("filesystems.disks.%s.endpoint", name)).(string),
+				config.Get(fmt.Sprintf("filesystems.disks.%s.bucket", name)).(string),
+				config.Get(fmt.Sprintf("filesystems.disks.%s.region", name)).(string),
+				config.Get(fmt.Sprintf("filesystems.disks.%s.key", name)).(string),
+				config.Get(fmt.Sprintf("filesystems.disks.%s.secret", name)).(string),
+				config.Get(fmt.Sprintf("filesystems.disks.%s.endpoint", name)).(string),
 			)
 			if err != nil {
 				panic(err)
@@ -57,5 +56,5 @@ func Resolve(name string, c *config.Config) fsys.FS {
 		}
 	}
 
-	return fsys.NewLocalStorage(c.Get("filesystems.disks.local.path").(string))
+	return fsys.NewLocalStorage(config.Get("filesystems.disks.local.path").(string))
 }

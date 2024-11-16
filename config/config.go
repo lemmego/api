@@ -10,153 +10,126 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 )
 
+// M is a type alias for a map of string to interface{}
 type M map[string]interface{}
 
-// Config represents a configuration map that can be nested
-type Config struct {
+// config represents a nested configuration map with thread-safe operations
+type config struct {
 	mu sync.RWMutex
 	m  M
 }
 
-// NewConfig returns a new instance of Config
-func NewConfig() *Config {
-	return &Config{
-		m: make(M),
-	}
+// newConfig initializes and returns a new config instance (private)
+func newConfig() *config {
+	return &config{m: make(M)}
 }
 
-// SetConfigMap sets the config map if none available, replaces otherwise.
-func (c *Config) SetConfigMap(cm M) *Config {
+var (
+	instance *config
+	once     sync.Once
+)
+
+func init() {
+	_ = GetInstance()
+}
+
+// GetInstance returns the singleton instance of config
+func GetInstance() Configuration {
+	once.Do(func() {
+		instance = newConfig()
+	})
+	return instance
+}
+
+// SetConfigMap sets or replaces the entire configuration map
+func (c *config) SetConfigMap(cm M) *config {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.m = cm
 	return c
 }
 
-// Set sets a configuration value
-func (c *Config) Set(key string, value interface{}) {
+// Set sets a configuration value, supporting nested keys
+func (c *config) Set(key string, value interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	keys := strings.Split(key, ".")
-	c.setRecursive(keys, value)
+	c.setRecursive(keys, value, 0)
 }
 
-func (c *Config) setRecursive(keys []string, value interface{}) {
+func (c *config) setRecursive(keys []string, value interface{}, depth int) {
 	if len(keys) == 1 {
-		// Handle the final key setting or merging
-		existing, exists := c.m[keys[0]]
-		if exists {
-			if existingMap, ok := existing.(map[string]interface{}); ok {
-				if newValueMap, ok := value.(map[string]interface{}); ok {
-					// Merge new values into existing map
-					for k, v := range newValueMap {
-						existingMap[k] = v
-					}
-					return // We've merged, no need to set again
-				}
-			}
-			if configM, ok := existing.(M); ok {
-				if newValueMap, ok := value.(M); ok {
-					for k, v := range newValueMap {
-						configM[k] = v
-					}
-					return
-				}
-			}
-		}
-		// If we're here, either it didn't exist, wasn't a map, or couldn't merge, so set directly
 		c.m[keys[0]] = value
 	} else {
-		var current map[string]interface{}
-		next, exists := c.m[keys[0]]
-		if !exists || next == nil {
-			current = make(map[string]interface{})
-			c.m[keys[0]] = current
-		} else {
-			var ok bool
-			if current, ok = next.(map[string]interface{}); !ok {
-				if current, ok = next.(M); !ok {
-					// If it's neither, we'll overwrite it with a new map
-					current = make(map[string]interface{})
-					c.m[keys[0]] = current
-				}
-			}
+		if _, exists := c.m[keys[0]]; !exists {
+			c.m[keys[0]] = make(M)
 		}
-		subConfig := &Config{m: current}
-		subConfig.setRecursive(keys[1:], value)
+		subConfig := &config{m: c.m[keys[0]].(M)}
+		subConfig.setRecursive(keys[1:], value, depth+1)
 	}
 }
 
-// Get retrieves a configuration value with type assertion. The fallback is optional.
-func (c *Config) Get(key string, fallback ...interface{}) interface{} {
+// Get retrieves a configuration value with optional fallback
+func (c *config) Get(key string, fallback ...interface{}) interface{} {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	keys := strings.Split(key, ".")
-	var current interface{} = c.m
-	for _, k := range keys {
-		switch v := current.(type) {
-		case map[string]interface{}:
-			if val, exists := v[k]; exists {
-				current = val
-			} else {
-				if len(fallback) == 0 {
-					return nil
-				}
-				return fallback[0]
-			}
-		case M:
-			if val, exists := v[k]; exists {
-				current = val
-			} else {
-				if len(fallback) == 0 {
-					return nil
-				}
-				return fallback[0]
-			}
-		default:
-			if len(fallback) == 0 {
-				return nil
-			}
-			return fallback[0]
-		}
+	value, _ := c.getRecursive(strings.Split(key, "."), c.m)
+	if value == nil && len(fallback) > 0 {
+		return fallback[0]
 	}
-	return current
+	return value
 }
 
-// GetAll returns all configurations
-func (c *Config) GetAll() map[string]interface{} {
+func (c *config) getRecursive(keys []string, current map[string]interface{}) (interface{}, bool) {
+	if len(keys) == 1 {
+		v, ok := current[keys[0]]
+		return v, ok
+	}
+	if next, ok := current[keys[0]].(map[string]interface{}); ok {
+		return c.getRecursive(keys[1:], next)
+	}
+	if next, ok := current[keys[0]].(M); ok {
+		// If it's of type M, we need to convert it to map[string]interface{}
+		return c.getRecursive(keys[1:], map[string]interface{}(next))
+	}
+	return nil, false
+}
+
+// GetAll returns a deep copy of all configurations
+func (c *config) GetAll() M {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return deepCopy(c.m)
 }
 
-// deepCopy creates a deep copy of the map to prevent external modifications
-func deepCopy(in map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{})
+// deepCopy creates a deep copy of the configuration map
+func deepCopy(in M) M {
+	out := make(M)
 	for k, v := range in {
-		if vm, ok := v.(map[string]interface{}); ok {
-			out[k] = deepCopy(vm)
-		} else {
+		switch v := v.(type) {
+		case map[string]interface{}:
+			out[k] = deepCopy(v)
+		case M:
+			out[k] = deepCopy(v)
+		default:
 			out[k] = v
 		}
 	}
 	return out
 }
 
-// MustEnv is similar to the previous implementation but adjusted for no generics
+// MustEnv retrieves an environment variable and converts it to the specified type or panics on failure
 func MustEnv[T any](key string, fallback T) T {
 	value, exists := os.LookupEnv(key)
 	if !exists {
-		//slog.Info(fmt.Sprintf("Using fallback value for key: %s", key), "fallback", fallback)
 		return fallback
 	}
 
 	var result T
 	var err error
 
-	// Type switch for conversion
 	switch any(fallback).(type) {
 	case int:
 		var i int
@@ -181,4 +154,26 @@ func MustEnv[T any](key string, fallback T) T {
 	}
 
 	return result
+}
+
+// Set sets a configuration value in the singleton instance
+func Set(key string, value interface{}) {
+	instance.Set(key, value)
+}
+
+// Get retrieves a configuration value from the singleton instance
+func Get(key string, fallback ...interface{}) interface{} {
+	return instance.Get(key, fallback...)
+}
+
+// GetAll returns all configurations from the singleton instance
+func GetAll() M {
+	return instance.GetAll()
+}
+
+type Configuration interface {
+	SetConfigMap(cm M) *config
+	Set(key string, value interface{})
+	Get(key string, fallback ...interface{}) interface{}
+	GetAll() M
 }

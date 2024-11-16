@@ -2,11 +2,13 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -20,6 +22,9 @@ const (
 )
 
 var (
+	dbManager *DatabaseManager
+	once      sync.Once
+
 	ErrUnknownDriver                    = errors.New("unknown driver")
 	ErrNoSuchConnection                 = errors.New("no such connection exists")
 	ErrNoSuchDatabase                   = errors.New("no such database exists")
@@ -28,14 +33,50 @@ var (
 )
 
 type DatabaseManager struct {
+	mutex       sync.RWMutex
 	connections map[string]*Connection
 }
 
-func NewDBManager() *DatabaseManager {
-	return &DatabaseManager{connections: make(map[string]*Connection)}
+func init() {
+	dbManager = DM()
+}
+
+func DM() *DatabaseManager {
+	if dbManager == nil {
+		once.Do(func() {
+			dbManager = &DatabaseManager{connections: make(map[string]*Connection), mutex: sync.RWMutex{}}
+		})
+	}
+
+	return dbManager
+}
+
+func Get(connName ...string) *Connection {
+	c, err := DM().Get(connName...)
+
+	if err != nil {
+		slog.Error(err.Error())
+		panic(err)
+	}
+
+	return c
+}
+
+func AddConnection(conn *Connection) *DatabaseManager {
+	dm, err := DM().Add(conn)
+
+	if err != nil {
+		slog.Error(err.Error())
+		panic(err)
+	}
+
+	return dm
 }
 
 func (dm *DatabaseManager) Get(connName ...string) (*Connection, error) {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+
 	var dbConn string
 	if len(connName) == 0 {
 		dbConn = os.Getenv("DB_CONNECTION")
@@ -55,7 +96,10 @@ func (dm *DatabaseManager) Get(connName ...string) (*Connection, error) {
 }
 
 func (dm *DatabaseManager) Add(conn *Connection) (*DatabaseManager, error) {
-	if dm.HasConnection(conn.ConnName()) {
+	dm.mutex.Lock()
+	defer dm.mutex.Unlock()
+
+	if _, exists := dm.connections[conn.ConnName()]; exists {
 		return nil, errors.New("dm: connection already exists")
 	}
 	dm.connections[conn.ConnName()] = conn
@@ -63,10 +107,14 @@ func (dm *DatabaseManager) Add(conn *Connection) (*DatabaseManager, error) {
 }
 
 func (dm *DatabaseManager) HasConnection(name string) bool {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
 	return dm.connections[name] != nil
 }
 
 func (dm *DatabaseManager) All() map[string]*Connection {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
 	return dm.connections
 }
 
@@ -76,6 +124,14 @@ func (conn *Connection) BindWhere(c context.Context, columnName string) *gorm.DB
 
 func (conn *Connection) DB() *gorm.DB {
 	return conn.db
+}
+
+func (conn *Connection) SqlDB() *sql.DB {
+	if sqlDb, err := conn.db.DB(); err != nil {
+		panic(err)
+	} else {
+		return sqlDb
+	}
 }
 
 type Model struct {
@@ -207,12 +263,13 @@ func (c *Connection) connectToMySQL() error {
 		Params:   dbConfig.Params,
 	}
 	dsnStr, err := dsn.String()
-	db, err := gorm.Open(mysql.Open(dsnStr), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(dsnStr), &gorm.Config{
+		SkipDefaultTransaction: true,
+		PrepareStmt:            true,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
-
-	slog.Info(fmt.Sprintf("created db session %s", dsn.Name))
 
 	c.db = db
 	return nil
@@ -234,12 +291,13 @@ func (c *Connection) connectToPostgres() error {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
-	db, err := gorm.Open(postgres.Open(dsnStr), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsnStr), &gorm.Config{
+		SkipDefaultTransaction: true,
+		PrepareStmt:            true,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
-
-	slog.Info(fmt.Sprintf("created db session %s", dsn.Name))
 
 	c.db = db
 	return nil
@@ -344,6 +402,11 @@ func (c *Connection) Open() (*Connection, error) {
 		if err != nil {
 			return nil, err
 		}
+		//sqlDB, _ := c.db.DB()
+		//sqlDB.SetMaxIdleConns(10)
+		//sqlDB.SetMaxOpenConns(100)
+		//sqlDB.SetConnMaxLifetime(time.Hour)
+
 		//dbInstances[c.config.ConnName] = db
 		return c, nil
 	case DialectPostgres:

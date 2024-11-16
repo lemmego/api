@@ -22,14 +22,14 @@ import (
 )
 
 type Validator struct {
-	AppManager
+	App
 	Errors shared.ValidationErrors
 }
 
-func NewValidator(app AppManager) *Validator {
+func NewValidator(app App) *Validator {
 	return &Validator{
-		AppManager: app,
-		Errors:     make(map[string][]string),
+		App:    app,
+		Errors: make(map[string][]string),
 	}
 }
 
@@ -528,16 +528,8 @@ func (f *VField) HexColor() *VField {
 
 func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
-	var dm *db.DatabaseManager
-	if err := f.vee.Service(&dm); err != nil {
-		f.vee.AddError(f.name, err.Error())
-	}
-	conn, err := dm.Get()
-	if err != nil {
-		f.vee.AddError(f.name, err.Error())
-	}
 
-	query := conn.DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
+	query := db.Get().DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
 
 	if len(whereClauses) > 0 {
 		for key, value := range whereClauses[0] {

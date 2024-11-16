@@ -218,9 +218,11 @@ func NewHandler(opts *slog.HandlerOptions) *LogHandler {
 }
 
 func Verbose() *slog.Logger {
+	slog.SetDefault(verboseLogger)
 	return verboseLogger
 }
 
 func Default() *slog.Logger {
+	slog.SetDefault(defaultLogger)
 	return defaultLogger
 }
