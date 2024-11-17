@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/lemmego/api/db"
 	"image"
 	"io"
 	"net"
@@ -21,14 +22,14 @@ import (
 )
 
 type Validator struct {
-	AppManager
+	App
 	Errors shared.ValidationErrors
 }
 
-func NewValidator(app AppManager) *Validator {
+func NewValidator(app App) *Validator {
 	return &Validator{
-		AppManager: app,
-		Errors:     make(map[string][]string),
+		App:    app,
+		Errors: make(map[string][]string),
 	}
 }
 
@@ -527,7 +528,8 @@ func (f *VField) HexColor() *VField {
 
 func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
-	query := f.vee.DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
+
+	query := db.Get().DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
 
 	if len(whereClauses) > 0 {
 		for key, value := range whereClauses[0] {

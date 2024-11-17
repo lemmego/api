@@ -61,7 +61,7 @@ func createTemplateCache() (map[string]*template.Template, error) {
 			return nil
 		}
 
-		if !strings.HasSuffix(path, ".page.tmpl") {
+		if !strings.HasSuffix(path, ".page.gohtml") {
 			return nil
 		}
 
@@ -76,13 +76,13 @@ func createTemplateCache() (map[string]*template.Template, error) {
 		}
 
 		// Find and parse layout templates
-		layouts, err := findTemplates(filepath.Dir(path), "*.layout.tmpl")
+		layouts, err := findTemplates(filepath.Dir(path), "*.layout.gohtml")
 		if err != nil {
 			return fmt.Errorf("error finding layout templates for %s: %v", name, err)
 		}
 
 		// Find and parse partial templates
-		partials, err := findTemplates(filepath.Dir(path), "*.partial.tmpl")
+		partials, err := findTemplates(filepath.Dir(path), "*.partial.gohtml")
 		if err != nil {
 			return fmt.Errorf("error finding partial templates for %s: %v", name, err)
 		}

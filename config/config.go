@@ -2,161 +2,178 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/joho/godotenv"
+	_ "github.com/joho/godotenv/autoload"
 )
 
-type ConfigMap map[string]interface{}
+// M is a type alias for a map of string to interface{}
+type M map[string]interface{}
+
+// config represents a nested configuration map with thread-safe operations
+type config struct {
+	mu sync.RWMutex
+	m  M
+}
+
+// newConfig initializes and returns a new config instance (private)
+func newConfig() *config {
+	return &config{m: make(M)}
+}
 
 var (
-	Conf ConfigMap = make(ConfigMap)
-	mu   sync.RWMutex
+	instance *config
+	once     sync.Once
 )
 
 func init() {
-	if err := godotenv.Load(); err != nil {
-		panic(err)
-	}
+	_ = GetInstance()
 }
 
-func Set(key string, value interface{}) {
-	mu.Lock()
-	defer mu.Unlock()
+// GetInstance returns the singleton instance of config
+func GetInstance() Configuration {
+	once.Do(func() {
+		instance = newConfig()
+	})
+	return instance
+}
+
+// SetConfigMap sets or replaces the entire configuration map
+func (c *config) SetConfigMap(cm M) *config {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m = cm
+	return c
+}
+
+// Set sets a configuration value, supporting nested keys
+func (c *config) Set(key string, value interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	keys := strings.Split(key, ".")
-	setRecursive(Conf, keys, value)
+	c.setRecursive(keys, value, 0)
 }
 
-func setRecursive(current ConfigMap, keys []string, value interface{}) {
+func (c *config) setRecursive(keys []string, value interface{}, depth int) {
 	if len(keys) == 1 {
-		if nestedMap, ok := value.(map[string]interface{}); ok {
-			// If the value is a map, convert it to ConfigMap
-			configMap := make(ConfigMap)
-			for k, v := range nestedMap {
-				setRecursive(configMap, []string{k}, v)
-			}
-			current[keys[0]] = configMap
-		} else {
-			current[keys[0]] = value
-		}
+		c.m[keys[0]] = value
 	} else {
-		if _, ok := current[keys[0]]; !ok {
-			current[keys[0]] = make(ConfigMap)
+		if _, exists := c.m[keys[0]]; !exists {
+			c.m[keys[0]] = make(M)
 		}
-		setRecursive(current[keys[0]].(ConfigMap), keys[1:], value)
+		subConfig := &config{m: c.m[keys[0]].(M)}
+		subConfig.setRecursive(keys[1:], value, depth+1)
 	}
 }
 
-func Get[T any](key string, fallback ...T) T {
-	mu.RLock()
-	defer mu.RUnlock()
+// Get retrieves a configuration value with optional fallback
+func (c *config) Get(key string, fallback ...interface{}) interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
-	keys := strings.Split(key, ".")
-	current := interface{}(Conf)
-
-	for _, k := range keys {
-		if m, ok := current.(ConfigMap); ok {
-			if val, exists := m[k]; exists {
-				current = val
-			} else {
-				return getFallbackOrZero(fallback)
-			}
-		} else {
-			return getFallbackOrZero(fallback)
-		}
-	}
-
-	// Try to convert the final value to type T
-	if result, ok := current.(T); ok {
-		return result
-	}
-
-	// Handle the case where T is map[string]any
-	if reflect.TypeOf(*(new(T))) == reflect.TypeOf(map[string]any{}) {
-		if m, ok := current.(ConfigMap); ok {
-			result := make(map[string]any)
-			for k, v := range m {
-				result[k] = v
-			}
-			return any(result).(T)
-		}
-	}
-
-	// If T is ConfigMap and current is map[string]interface{}, convert it
-	if _, ok := interface{}(*(new(T))).(ConfigMap); ok {
-		if m, ok := current.(map[string]interface{}); ok {
-			return interface{}(ConfigMap(m)).(T)
-		}
-	}
-
-	return getFallbackOrZero(fallback)
-}
-
-func getFallbackOrZero[T any](fallback []T) T {
-	if len(fallback) > 0 {
+	value, _ := c.getRecursive(strings.Split(key, "."), c.m)
+	if value == nil && len(fallback) > 0 {
 		return fallback[0]
 	}
-	var zero T
-	return zero
+	return value
 }
 
-func GetAll() ConfigMap {
-	mu.RLock()
-	defer mu.RUnlock()
-
-	return Conf
+func (c *config) getRecursive(keys []string, current map[string]interface{}) (interface{}, bool) {
+	if len(keys) == 1 {
+		v, ok := current[keys[0]]
+		return v, ok
+	}
+	if next, ok := current[keys[0]].(map[string]interface{}); ok {
+		return c.getRecursive(keys[1:], next)
+	}
+	if next, ok := current[keys[0]].(M); ok {
+		// If it's of type M, we need to convert it to map[string]interface{}
+		return c.getRecursive(keys[1:], map[string]interface{}(next))
+	}
+	return nil, false
 }
 
-func Reset() {
-	mu.Lock()
-	defer mu.Unlock()
-
-	Conf = make(ConfigMap)
+// GetAll returns a deep copy of all configurations
+func (c *config) GetAll() M {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return deepCopy(c.m)
 }
 
-// MustEnv returns the value of the environment variable or panics if the variable is not set or if the type is unsupported.
+// deepCopy creates a deep copy of the configuration map
+func deepCopy(in M) M {
+	out := make(M)
+	for k, v := range in {
+		switch v := v.(type) {
+		case map[string]interface{}:
+			out[k] = deepCopy(v)
+		case M:
+			out[k] = deepCopy(v)
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// MustEnv retrieves an environment variable and converts it to the specified type or panics on failure
 func MustEnv[T any](key string, fallback T) T {
-	value, ok := os.LookupEnv(key)
-	if !ok {
-		slog.Info(fmt.Sprintf("Using fallback value for key: %s", key), key, fallback)
+	value, exists := os.LookupEnv(key)
+	if !exists {
 		return fallback
 	}
 
-	fallbackType := reflect.TypeOf(fallback)
+	var result T
+	var err error
 
-	// Check if the fallback type is supported
-	switch fallbackType.Kind() {
-	case reflect.Int, reflect.Int64:
-		result, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			panic(err)
-		}
-		return reflect.ValueOf(result).Convert(fallbackType).Interface().(T)
-
-	case reflect.Float64:
-		result, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			panic(err)
-		}
-		return reflect.ValueOf(result).Convert(fallbackType).Interface().(T)
-
-	case reflect.Bool:
-		result, err := strconv.ParseBool(value)
-		if err != nil {
-			panic(err)
-		}
-		return reflect.ValueOf(result).Convert(fallbackType).Interface().(T)
-
-	case reflect.String:
-		return reflect.ValueOf(value).Convert(fallbackType).Interface().(T)
-
+	switch any(fallback).(type) {
+	case int:
+		var i int
+		i, err = strconv.Atoi(value)
+		result = any(i).(T)
+	case float64:
+		var f float64
+		f, err = strconv.ParseFloat(value, 64)
+		result = any(f).(T)
+	case bool:
+		var b bool
+		b, err = strconv.ParseBool(value)
+		result = any(b).(T)
+	case string:
+		result = any(value).(T)
 	default:
-		panic(fmt.Sprintf("unsupported type: %v", fallbackType))
+		panic(fmt.Sprintf("unsupported type for environment variable %s", key))
 	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	return result
+}
+
+// Set sets a configuration value in the singleton instance
+func Set(key string, value interface{}) {
+	instance.Set(key, value)
+}
+
+// Get retrieves a configuration value from the singleton instance
+func Get(key string, fallback ...interface{}) interface{} {
+	return instance.Get(key, fallback...)
+}
+
+// GetAll returns all configurations from the singleton instance
+func GetAll() M {
+	return instance.GetAll()
+}
+
+type Configuration interface {
+	SetConfigMap(cm M) *config
+	Set(key string, value interface{})
+	Get(key string, fallback ...interface{}) interface{}
+	GetAll() M
 }

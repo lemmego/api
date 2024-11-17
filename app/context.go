@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lemmego/api/fs"
+	"github.com/lemmego/api/session"
 	"html/template"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -17,12 +20,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lemmego/api/db"
-	"github.com/lemmego/api/fsys"
-	"github.com/lemmego/api/logger"
 	"github.com/lemmego/api/res"
 	"github.com/lemmego/api/shared"
-
 	inertia "github.com/romsar/gonertia"
 
 	"github.com/lemmego/api/req"
@@ -40,9 +39,10 @@ func init() {
 
 type Context struct {
 	sync.Mutex
-	app     AppManager
+	app     App
 	request *http.Request
 	writer  http.ResponseWriter
+	status  int
 
 	handlers []Handler
 	index    int
@@ -50,14 +50,11 @@ type Context struct {
 
 type R struct {
 	Status       int
-	TemplateName string
-	InertiaView  string
 	Payload      M
+	TemplateView string
+	TemplView    string
+	InertiaView  string
 	RedirectTo   string
-}
-
-func (c *Context) Plugin(plugin Plugin) Plugin {
-	return c.App().Plugin(plugin)
 }
 
 func (c *Context) Next() error {
@@ -154,38 +151,40 @@ func (c *Context) GetInput() any {
 }
 
 func (c *Context) Respond(r *R) error {
-	if r.Status == 0 {
-		r.Status = http.StatusOK
-	}
-
-	if c.WantsJSON() {
-		if r.Payload != nil {
-			return c.JSON(r.Status, r.Payload)
+	if r.RedirectTo != "" {
+		if r.Status == 0 {
+			r.Status = http.StatusFound
 		}
+		return c.Status(r.Status).Redirect(r.RedirectTo)
 	}
 
 	if r.InertiaView != "" {
-		return c.Inertia(r.Status, r.InertiaView, r.Payload)
+		if r.Status == 0 {
+			r.Status = http.StatusOK
+		}
+		return c.Status(r.Status).Inertia(r.InertiaView, r.Payload)
 	}
 
-	if r.RedirectTo != "" {
-		return c.Redirect(http.StatusFound, r.RedirectTo)
-	}
+	if r.TemplateView != "" {
+		templateData := &res.TemplateData{}
 
-	templateData := &res.TemplateData{}
+		if r.Payload != nil {
+			templateData.Data = r.Payload
+		}
+		return c.Render(r.TemplateView, templateData)
+	}
 
 	if r.Payload != nil {
-		templateData.Data = r.Payload
-	}
-
-	if r.TemplateName != "" {
-		return c.Render(r.Status, r.TemplateName, templateData)
+		if r.Status == 0 {
+			r.Status = http.StatusOK
+		}
+		return c.Status(r.Status).JSON(r.Payload)
 	}
 
 	return nil
 }
 
-func (c *Context) App() AppManager {
+func (c *Context) App() App {
 	return c.app
 }
 
@@ -201,30 +200,18 @@ func (c *Context) RequestContext() context.Context {
 	return c.request.Context()
 }
 
-func (c *Context) FS() fsys.FS {
-	return c.app.FS()
-}
-
-func (c *Context) DB() *db.DB {
-	c.app.DbFunc(c.request.Context(), nil)
-	return c.app.DB()
-	//dbm, err := c.app.Resolve((*db.DB)(nil))
-	//if err != nil {
-	//	log.Println(fmt.Errorf("db: %w", err))
-	//	return nil
-	//}
-	//
-	//return dbm.(*db.DB)
-}
-
-func (c *Context) I() *inertia.Inertia {
-	return c.app.Inertia()
-}
-
-func (c *Context) Templ(status int, component templ.Component) error {
+func (c *Context) Templ(component templ.Component) error {
 	c.writer.Header().Set("content-type", "text/html")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	return component.Render(c.Request().Context(), c.writer)
+}
+
+func (c *Context) Status(status int) *Context {
+	c.status = status
+	return c
 }
 
 func (c *Context) GetHeader(key string) string {
@@ -243,11 +230,14 @@ func (c *Context) WantsHTML() bool {
 	return req.WantsHTML(c.request)
 }
 
-func (c *Context) JSON(status int, body M) error {
+func (c *Context) JSON(body M) error {
 	// TODO: Check if header is already sent
 	response, _ := json.Marshal(body)
 	c.writer.Header().Set("content-Type", "application/json")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	_, err := c.writer.Write(response)
 	return err
 }
@@ -279,24 +269,33 @@ func (c *Context) resolveTemplateData(data *res.TemplateData) *res.TemplateData 
 	return data
 }
 
-func (c *Context) Text(status int, body []byte) error {
+func (c *Context) Text(body []byte) error {
 	c.writer.Header().Set("content-type", "text/plain")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	_, err := c.writer.Write(body)
 	return err
 }
 
-func (c *Context) HTML(status int, body []byte) error {
+func (c *Context) HTML(body []byte) error {
 	c.writer.Header().Set("content-type", "text/html")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	_, err := c.writer.Write(body)
 	return err
 }
 
-func (c *Context) Render(status int, tmplPath string, data *res.TemplateData) error {
+func (c *Context) Render(tmplPath string, data *res.TemplateData) error {
 	data = c.resolveTemplateData(data)
 	c.writer.Header().Set("content-type", "text/html")
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
 	data.FuncMap = template.FuncMap{
 		"csrf": func() template.HTML {
 			token := c.GetSessionString("_token")
@@ -306,8 +305,9 @@ func (c *Context) Render(status int, tmplPath string, data *res.TemplateData) er
 	return res.RenderTemplate(c.writer, tmplPath, data)
 }
 
-func (c *Context) Inertia(status int, filePath string, props map[string]any) error {
-	if c.app.Inertia() == nil {
+func (c *Context) Inertia(filePath string, props map[string]any) error {
+	var i *inertia.Inertia
+	if c.App().Service(&i) != nil {
 		return errors.New("inertia not enabled")
 	}
 
@@ -319,18 +319,27 @@ func (c *Context) Inertia(status int, filePath string, props map[string]any) err
 		props["errors"] = errs
 	}
 
-	c.writer.WriteHeader(status)
-	return c.App().Inertia().Render(c.ResponseWriter(), c.Request(), filePath, props)
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
+	return i.Render(c.ResponseWriter(), c.Request(), filePath, props)
 }
 
-func (c *Context) Redirect(status int, url string) error {
-	if c.I() != nil {
-		c.I().Redirect(c.ResponseWriter(), c.Request(), url)
-		return nil
+func (c *Context) Redirect(url string) error {
+	if c.IsInertiaRequest() {
+		var i *inertia.Inertia
+		if c.App().Service(&i) != nil {
+			i.Redirect(c.ResponseWriter(), c.Request(), url)
+			return nil
+		}
 	}
 
 	c.writer.Header().Set("Location", url)
-	c.writer.WriteHeader(status)
+	if c.status == 0 {
+		c.status = http.StatusFound
+	}
+	c.writer.WriteHeader(c.status)
 	return nil
 }
 
@@ -370,13 +379,18 @@ func (c *Context) WithInput() *Context {
 	return c
 }
 
-func (c *Context) Back(status int) error {
-	if c.app.Inertia() != nil {
-		c.App().Inertia().Back(c.ResponseWriter(), c.Request(), status)
+func (c *Context) Back() error {
+	if c.status == 0 {
+		c.status = http.StatusFound
+	}
+
+	var i *inertia.Inertia
+	if c.App().Service(&i) == nil {
+		i.Back(c.ResponseWriter(), c.Request(), c.status)
 		return nil
 	}
 
-	return c.Redirect(status, c.Referer())
+	return c.Redirect(c.Referer())
 }
 
 func (c *Context) Referer() string {
@@ -457,9 +471,9 @@ func (c *Context) HasFile(key string) bool {
 	return err == nil
 }
 
-func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, error) {
-	if c.HasFile(key) {
-		file, header, err := c.FormFile(key)
+func (c *Context) Upload(uploadedFileName string, dir string, filename ...string) (*os.File, error) {
+	if c.HasFile(uploadedFileName) {
+		file, header, err := c.FormFile(uploadedFileName)
 
 		if err != nil {
 			return nil, fmt.Errorf("could not get form file: %w", err)
@@ -468,7 +482,7 @@ func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, 
 		defer func() {
 			err := file.Close()
 			if err != nil {
-				logger.V().Info("Form file could not be closed", "Error:", err)
+				slog.Info("Form file could not be closed", "Error:", err)
 			}
 		}()
 
@@ -476,10 +490,20 @@ func (c *Context) Upload(key string, dir string, filename ...string) (*os.File, 
 			header.Filename = filename[0]
 		}
 
-		return c.FS().Upload(file, header, dir)
+		var fm *fs.FilesystemManager
+
+		if err := c.App().Service(&fm); err != nil {
+			return nil, err
+		} else {
+			fss, err := fm.Get()
+			if err != nil {
+				return nil, err
+			}
+			return fss.Upload(file, header, dir)
+		}
 	}
 
-	return nil, nil
+	return nil, errors.New("file with the provided uploadedFileName does not exist")
 }
 
 func (c *Context) File(path string, headers ...map[string][]string) error {
@@ -491,7 +515,7 @@ func (c *Context) File(path string, headers ...map[string][]string) error {
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			logger.V().Info("File could not be closed", "Error:", err)
+			slog.Info("File could not be closed", "Error:", err)
 		}
 	}()
 
@@ -514,15 +538,26 @@ func (c *Context) File(path string, headers ...map[string][]string) error {
 }
 
 func (c *Context) StorageFile(path string, headers ...map[string][]string) error {
-	if exists, err := c.FS().Exists(path); err != nil || !exists {
+	var fm *fs.FilesystemManager
+
+	if err := c.App().Service(&fm); err != nil {
+		return err
+	}
+
+	fss, err := fm.Get()
+	if err != nil {
+		return err
+	}
+
+	if exists, err := fss.Exists(path); err != nil || !exists {
 		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
 	}
 
-	file, err := c.FS().Open(path)
+	file, err := fss.Open(path)
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			logger.V().Info("File could not be closed", "Error:", err)
+			slog.Info("File could not be closed", "Error:", err)
 		}
 	}()
 
@@ -546,15 +581,26 @@ func (c *Context) StorageFile(path string, headers ...map[string][]string) error
 }
 
 func (c *Context) Download(path string, filename string) error {
-	if exists, err := c.FS().Exists(path); err != nil || !exists {
+	var fm *fs.FilesystemManager
+
+	if err := c.App().Service(&fm); err != nil {
+		return err
+	}
+
+	fss, err := fm.Get()
+	if err != nil {
+		return err
+	}
+
+	if exists, err := fss.Exists(path); err != nil || !exists {
 		return c.Error(http.StatusNotFound, fmt.Errorf("file not found: %s", path))
 	}
 
-	file, err := c.FS().Open(path)
+	file, err := fss.Open(path)
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			logger.V().Info("File could not be closed", "Error:", err)
+			slog.Info("File could not be closed", "Error:", err)
 		}
 	}()
 
@@ -587,35 +633,70 @@ func (c *Context) Get(key string) any {
 }
 
 func (c *Context) PutSession(key string, value any) *Context {
-	c.app.Session().Put(c.Request().Context(), key, value)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return nil
+	}
+
+	sess.Put(c.Request().Context(), key, value)
 	return c
 }
 
 func (c *Context) PopSession(key string) any {
-	return c.app.Session().Pop(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return nil
+	}
+
+	return sess.Pop(c.Request().Context(), key)
 }
 
 func (c *Context) PopSessionString(key string) string {
-	return c.app.Session().PopString(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return ""
+	}
+
+	return sess.PopString(c.Request().Context(), key)
 }
 
 func (c *Context) GetSession(key string) any {
-	return c.app.Session().Get(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return nil
+	}
+
+	return sess.Get(c.Request().Context(), key)
 }
 
 func (c *Context) GetSessionString(key string) string {
-	return c.app.Session().GetString(c.Request().Context(), key)
+	var sess *session.Session
+
+	if err := c.App().Service(&sess); err != nil {
+		slog.Error(err.Error())
+		return ""
+	}
+
+	return sess.GetString(c.Request().Context(), key)
 }
 
 func (c *Context) Error(status int, err error) error {
 	if c.WantsJSON() {
-		return c.JSON(status, M{"message": err.Error()})
+		return c.JSON(M{"message": err.Error()})
 	}
 	c.writer.WriteHeader(status)
 	if _, e := c.writer.Write([]byte(err.Error())); e != nil {
 		return err
 	}
-	return err
+	return nil
 }
 
 func (c *Context) ValidationError(err error) error {
@@ -626,11 +707,10 @@ func (c *Context) ValidationError(err error) error {
 	}
 
 	if c.WantsJSON() || c.Referer() == "" {
-		return c.JSON(http.StatusUnprocessableEntity, M{"errors": err})
+		return c.Status(http.StatusUnprocessableEntity).JSON(M{"errors": err})
 	}
 
-	c.WithErrors(err.(shared.ValidationErrors)).WithInput().Back(http.StatusFound)
-	return nil
+	return c.WithErrors(err.(shared.ValidationErrors)).WithInput().Back()
 }
 
 func (c *Context) InternalServerError(err error) error {
@@ -655,6 +735,11 @@ func (c *Context) Forbidden(err error) error {
 
 func (c *Context) PageExpired() error {
 	return c.Error(419, errors.New("page expired"))
+}
+
+func (c *Context) NoContent() error {
+	c.Status(204).writer.Write(nil)
+	return nil
 }
 
 func (c *Context) DecodeJSON(v interface{}) error {

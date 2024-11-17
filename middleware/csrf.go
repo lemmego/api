@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	inertia "github.com/romsar/gonertia"
 	"net/http"
 	"strings"
 
@@ -12,8 +13,6 @@ import (
 func matchedToken(c *app.Context) bool {
 	sessionToken := c.GetSessionString("_token")
 	token := getTokenFromRequest(c)
-
-	println("sessionToken", sessionToken, "inputToken", token)
 
 	matched := false
 	if sessionToken != "" && token != "" {
@@ -35,6 +34,12 @@ func getTokenFromRequest(c *app.Context) string {
 	if token == "" {
 		token = c.Request().FormValue("_token")
 	}
+
+	//if token == "" {
+	//	if csrfCookie, err := c.Request().Cookie("XSRF-TOKEN"); err == nil {
+	//		token = strings.TrimSpace(csrfCookie.Value)
+	//	}
+	//}
 
 	if token == "" {
 		body := map[string]any{}
@@ -58,18 +63,20 @@ func VerifyCSRF(c *app.Context) error {
 				token = utils.GenerateRandomString(40)
 			}
 			c.PutSession("_token", token)
+			c.Set("_token", token)
 
-			if c.I() != nil {
-				c.I().ShareProp("csrfToken", token)
+			var i *inertia.Inertia
+			if err := c.App().Service(&i); err == nil {
+				i.ShareProp("csrfToken", token)
 			}
 
 			http.SetCookie(c.ResponseWriter(), &http.Cookie{
-				Name:     "XSRF-TOKEN",
-				Value:    token,
-				Path:     "/",
-				HttpOnly: true,                    // Not accessible via JavaScript
-				Secure:   true,                    // Send only over HTTPS
-				SameSite: http.SameSiteStrictMode, // Prevents the browser from sending this cookie along with cross-site requests
+				Name:  "XSRF-TOKEN",
+				Value: token,
+				Path:  "/",
+				//HttpOnly: true,                 // Not accessible via JavaScript
+				Secure:   true,                 // Send only over HTTPS
+				SameSite: http.SameSiteLaxMode, // Prevents the browser from sending this cookie along with cross-site requests
 			})
 		}
 		return c.Next()

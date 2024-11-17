@@ -3,7 +3,7 @@ package app
 import "github.com/ggicci/httpin"
 
 type BaseInput struct {
-	App       AppManager
+	App       App
 	Ctx       *Context
 	Validator *Validator
 }

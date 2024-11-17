@@ -5,52 +5,56 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lemmego/api/session"
+	"github.com/romsar/gonertia"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"reflect"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/lemmego/api/config"
-	"github.com/lemmego/api/fsys"
-	"github.com/lemmego/api/logger"
 	"github.com/lemmego/api/req"
-	"github.com/lemmego/api/session"
 	"github.com/lemmego/api/shared"
 
 	"github.com/lemmego/api/db"
-
-	inertia "github.com/romsar/gonertia"
-	"github.com/spf13/cobra"
+	"github.com/lemmego/migration/cmd"
 )
 
-type PluginID string
+// Global variable to hold the singleton instance
+var instance *Application
 
-type PluginRegistry map[PluginID]Plugin
+// Once ensures that the initialization function is called only once
+var once sync.Once
 
-// Get a plugin
-func (r PluginRegistry) Get(plugin Plugin) Plugin {
-	nameSpace := fmt.Sprintf("%T", plugin)
-
-	if val, ok := r[PluginID(nameSpace)]; ok {
-		return val
+// Get returns the single instance of the app
+func Get() App {
+	if instance == nil {
+		once.Do(func() {
+			instance = &Application{
+				mu:                        sync.Mutex{},
+				Services:                  newServiceContainer(),
+				router:                    newRouter(),
+				config:                    config.GetInstance(),
+				serviceRegistrarCallbacks: []func(a App) error{},
+				bootStrapperCallbacks:     []func(a App) error{},
+				runningInConsole:          len(os.Args) > 1,
+			}
+		})
 	}
-
-	return nil
+	return instance
 }
 
-// Add a plugin
-func (r PluginRegistry) Add(plugin Plugin) {
-	nameSpace := fmt.Sprintf("%T", plugin)
-	r[PluginID(nameSpace)] = plugin
+func init() {
+	_ = Get()
 }
 
 type M map[string]any
 
+// Error returns a string representation of the JSON-encoded map.
 func (m M) Error() string {
 	jsonEncoded, err := json.Marshal(m)
 	if err != nil {
@@ -59,315 +63,235 @@ func (m M) Error() string {
 	return string(jsonEncoded)
 }
 
-type Plugin interface {
-	Boot(a AppManager) error
-	InstallCommand() *cobra.Command
-	Commands() []*cobra.Command
-	EventListeners() map[string]func()
-	PublishableMigrations() map[string][]byte
-	PublishableModels() map[string][]byte
-	PublishableTemplates() map[string][]byte
-	Middlewares() []HTTPMiddleware
-	Routes() []*Route
-	Webhooks() []string
+type Bootstrapper interface {
+	WithConfig(c config.M) Bootstrapper
+	WithCommands(commands []Command) Bootstrapper
+	WithRoutes(routeCallback RouteCallback) Bootstrapper
+	Run()
 }
 
-type AppManager interface {
-	Plugin(Plugin) Plugin
-	Plugins() PluginRegistry
-	Router() *Router
-	Session() *session.Session
-	Inertia() *inertia.Inertia
-	DB() *db.DB
-	DbFunc(c context.Context, config *db.Config) (*db.DB, error)
-	FS() fsys.FS
+type ServiceRegistrar interface {
+	Service(serviceType interface{}) error
+	AddService(serviceType interface{})
 }
 
-type AppHooks struct {
-	BeforeStart func()
-	AfterStart  func()
+type AppCore interface {
+	Config() config.Configuration
+	Router() Router
+	RunningInConsole() bool
+	AddCommands(commands []Command)
 }
 
-type App struct {
+type App interface {
+	ServiceRegistrar
+	AppCore
+}
+
+type AppEngine interface {
+	Bootstrapper
+	ServiceRegistrar
+	AppCore
+}
+
+// Application is the main application
+type Application struct {
 	//*container.Container
-	isContextReady   bool
-	mu               sync.Mutex
-	session          *session.Session
-	config           config.ConfigMap
-	plugins          PluginRegistry
-	serviceProviders []ServiceProvider
-	hooks            *AppHooks
-	router           *Router
-	db               *db.DB
-	dbFunc           func(c context.Context, config *db.Config) (*db.DB, error)
-	i                *inertia.Inertia
-	routeRegistrar   RouteRegistrarFunc
-	fs               fsys.FS
+	Services                  *ServiceContainer
+	mu                        sync.Mutex
+	config                    config.Configuration
+	router                    *HTTPRouter
+	routeCallbacks            []RouteCallback
+	serviceRegistrarCallbacks []func(a App) error
+	bootStrapperCallbacks     []func(a App) error
+	commands                  []Command
+	runningInConsole          bool
 }
 
 type Options struct {
-	//*container.Container
-	*session.Session
-	Config           config.ConfigMap
-	Plugins          map[PluginID]Plugin
-	ServiceProviders []ServiceProvider
-	routeMiddlewares map[string]Middleware
-	Hooks            *AppHooks
-	inertia          *inertia.Inertia
-	fs               fsys.FS
+	Config   config.M
+	Commands []Command
+	Routes   RouteCallback
 }
 
 type OptFunc func(opts *Options)
 
-//func (app *App) Reset() {
-//	if app.Container != nil {
-//		app.Container.Clear()
-//	}
-//}
-
-func (app *App) Plugin(plugin Plugin) Plugin {
-	return app.plugins.Get(plugin)
-}
-
-func (app *App) Plugins() PluginRegistry {
-	return app.plugins
-}
-
-func (app *App) RegisterRoutes(fn RouteRegistrarFunc) {
-	app.routeRegistrar = fn
-}
-
-func (app *App) Router() *Router {
-	return app.router
-}
-
-func (app *App) Session() *session.Session {
-	return app.session
-}
-
-func (app *App) SetSession(session *session.Session) {
-	app.session = session
-}
-
-func (app *App) Inertia() *inertia.Inertia {
-	return app.i
-}
-
-func (app *App) DB() *db.DB {
-	return app.db
-}
-
-func (app *App) DbFunc(c context.Context, config *db.Config) (*db.DB, error) {
-	return app.dbFunc(c, config)
-}
-
-func (app *App) SetDB(db *db.DB) {
-	app.db = db
-}
-
-func (app *App) SetDbFunc(dbFunc func(c context.Context, config *db.Config) (*db.DB, error)) {
-	app.dbFunc = dbFunc
-}
-
-func (app *App) FS() fsys.FS {
-	return app.fs
-}
-
-func getDefaultConfig() config.ConfigMap {
-	return config.GetAll()
-}
-
-func defaultOptions() *Options {
-	return &Options{
-		//container.New(),
-		nil,
-		getDefaultConfig(),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
+func RegisterService(registrar func(a App) error) {
+	if instance == nil {
+		Get()
 	}
+
+	instance.serviceRegistrarCallbacks = append(instance.serviceRegistrarCallbacks, registrar)
 }
 
-func WithPlugins(plugins map[PluginID]Plugin) OptFunc {
+func BootService(bootstrapper func(a App) error) {
+	if instance == nil {
+		Get()
+	}
+
+	instance.bootStrapperCallbacks = append(instance.bootStrapperCallbacks, bootstrapper)
+}
+
+func (a *Application) Router() Router {
+	return a.router
+}
+
+func (a *Application) Config() config.Configuration {
+	return a.config
+}
+
+func (a *Application) AddCommands(commands []Command) {
+	a.commands = append(a.commands, commands...)
+}
+
+func WithConfig(config config.M) OptFunc {
 	return func(opts *Options) {
-		opts.Plugins = plugins
+		opts.Config = config
 	}
 }
 
-func WithProviders(providers []ServiceProvider) OptFunc {
+func WithCommands(commands []Command) OptFunc {
 	return func(opts *Options) {
-		opts.ServiceProviders = providers
+		opts.Commands = commands
 	}
 }
 
-func WithHooks(hooks *AppHooks) OptFunc {
+func WithRoutes(routes RouteCallback) OptFunc {
 	return func(opts *Options) {
-		opts.Hooks = hooks
+		opts.Routes = routes
 	}
 }
 
-func WithInertia(i *inertia.Inertia) OptFunc {
-	if i == nil {
-		i = initInertia()
-	}
-	return func(opts *Options) {
-		opts.inertia = i
-	}
-}
-
-func WithFS(fs fsys.FS) OptFunc {
-	if fs == nil {
-		fs = fsys.NewLocalStorage("./storage")
-	}
-	return func(opts *Options) {
-		opts.fs = fs
-	}
-}
-
-//func WithRouter(router HTTPRouter) OptFunc {
-//	return func(opts *Options) {
-//		opts.HTTPRouter = router
-//	}
-//}
-
-//func WithContainer(container *container.Container) OptFunc {
-//	return func(opts *Options) {
-//		opts.Container = container
-//	}
-//}
-
-func WithSession(sm *session.Session) OptFunc {
-	return func(opts *Options) {
-		opts.Session = sm
-	}
-}
-
-func New(optFuncs ...OptFunc) *App {
-	opts := defaultOptions()
+func Configure(optFuncs ...OptFunc) AppEngine {
+	opts := &Options{}
 
 	for _, optFunc := range optFuncs {
 		optFunc(opts)
 	}
 
-	for _, plugin := range opts.Plugins {
-		// Copy template files listed in the Views() method to the app's template directory
-		for name, content := range plugin.PublishableTemplates() {
-			filePath := filepath.Join(config.Get[string]("app.templateDir"), name)
-			if _, err := os.Stat(filePath); err != nil {
-				err := os.WriteFile(filePath, []byte(content), 0644)
-				if err != nil {
-					panic(err)
-				}
-				slog.Info("Copied template %s to %s\n", name, filePath)
-			}
-		}
+	i := Get().(*Application)
+
+	if opts.Config != nil {
+		i.config.SetConfigMap(opts.Config)
 	}
 
-	router := NewRouter()
-
-	inertia := opts.inertia
-	app := &App{
-		//Container:        opts.Container,
-		isContextReady:   false,
-		mu:               sync.Mutex{},
-		config:           opts.Config,
-		plugins:          opts.Plugins,
-		serviceProviders: opts.ServiceProviders,
-		hooks:            opts.Hooks,
-		router:           router,
-		i:                inertia,
-		fs:               opts.fs,
+	if opts.Commands != nil && len(opts.Commands) > 0 {
+		i.commands = append(i.commands, opts.Commands...)
 	}
-	return app
+
+	if opts.Routes != nil {
+		i.routeCallbacks = append(i.routeCallbacks, opts.Routes)
+	}
+
+	return i
 }
 
-// func (app *App) Container() container.Container {
-// 	return app.container
-// }
+func (a *Application) RunningInConsole() bool {
+	return a.runningInConsole
+}
 
-func (app *App) registerServiceProviders(serviceProviders []ServiceProvider) {
-	serviceProviders = append(serviceProviders, app.serviceProviders...)
-	for _, svc := range serviceProviders {
-		extendsBase := false
-		if reflect.TypeOf(svc).Kind() != reflect.Ptr {
-			panic("Service must be a pointer")
-		}
-		if reflect.TypeOf(svc).Elem().Kind() != reflect.Struct {
-			panic("Service must be a struct")
-		}
+// Service is a helper method to easily get a service
+func (a *Application) Service(serviceType interface{}) error {
+	return a.Services.Get(serviceType)
+}
 
-		// Iterate over all the fields of the struct and see if it extends *BaseServiceProvider
-		for i := 0; i < reflect.TypeOf(svc).Elem().NumField(); i++ {
-			if reflect.TypeOf(svc).Elem().Field(i).Type == reflect.PointerTo(reflect.TypeOf(BaseServiceProvider{})) {
-				extendsBase = true
-				break
-			}
-		}
+// AddService is a helper method to easily add a service
+func (a *Application) AddService(serviceType interface{}) {
+	a.Services.Add(serviceType)
+}
 
-		if !extendsBase {
-			panic("Service must extend BaseServiceProvider")
-		}
+// WithConfig sets the config map to the current config instance
+func (a *Application) WithConfig(c config.M) Bootstrapper {
+	a.config.SetConfigMap(c)
+	return a
+}
 
-		// Check if service implements ServiceProvider interface, not necessary if type hinted
-		if reflect.TypeOf(svc).Implements(reflect.TypeOf((*ServiceProvider)(nil)).Elem()) {
-			slog.Info("Registering service: " + reflect.TypeOf(svc).Elem().Name())
-			svc.Register(app)
-			app.serviceProviders = append(app.serviceProviders, svc)
-		} else {
-			panic("Service must implement ServiceProvider interface")
-		}
+// WithRoutes calls the provided callback and registers the routes
+func (a *Application) WithRoutes(routeCallback RouteCallback) Bootstrapper {
+	a.routeCallbacks = append(a.routeCallbacks, routeCallback)
+	return a
+}
+
+// WithCommands register the commands
+func (a *Application) WithCommands(commands []Command) Bootstrapper {
+	a.commands = commands
+	return a
+}
+
+func (a *Application) registerCommands() {
+	for _, command := range a.commands {
+		rootCmd.AddCommand(command(a))
 	}
 
-	for _, service := range serviceProviders {
-		if reflect.TypeOf(service).Implements(reflect.TypeOf((*ServiceProvider)(nil)).Elem()) {
-			service.Boot()
-		}
+	rootCmd.AddCommand(publishCmd)
+
+	rootCmd.AddCommand(cmd.MigrateCmd)
+
+	if err := rootCmd.Execute(); err != nil {
+		panic(err)
 	}
 }
 
-func (app *App) registerMiddlewares() {
-	for _, plugin := range app.plugins {
-		for _, mw := range plugin.Middlewares() {
-			app.router.Use(mw)
+func (a *Application) registerServiceProviders() {
+	for _, callback := range a.serviceRegistrarCallbacks {
+		if err := callback(a); err != nil {
+			panic(err)
 		}
 	}
+
+	for _, callback := range a.bootStrapperCallbacks {
+		if err := callback(a); err != nil {
+			panic(err)
+		}
+	}
+	return
 }
 
-func (app *App) registerRoutes() {
-	for namespace, plugin := range app.plugins {
-		for _, route := range plugin.Routes() {
-			if !app.router.HasRoute(route.Method, route.Path) {
-				log.Println("Adding route for the", namespace, "plugin:", route.Method, route.Path)
-				app.router.addRoute(route.Method, route.Path, route.Handlers...)
-				//r.routes = append(r.routes, route)
-			}
-		}
+func (a *Application) registerMiddlewares() {
+	// Register global middleware
+}
+
+func (a *Application) registerRoutes() {
+	for _, cb := range a.routeCallbacks {
+		cb(a.router)
 	}
 
-	for _, route := range app.router.routes {
-		log.Printf("Registering route: %s %s, router: %p", route.Method, route.Path, route.router)
-		app.router.mux.HandleFunc(route.Method+" "+route.Path, func(w http.ResponseWriter, req *http.Request) {
-			makeHandlerFunc(app, route, app.router)(w, req)
+	for _, route := range a.router.routes {
+		slog.Debug(fmt.Sprintf("Registering route: %s %s", route.Method, route.Path))
+		a.router.mux.HandleFunc(route.Method+" "+route.Path, func(w http.ResponseWriter, req *http.Request) {
+			makeHandlerFunc(a, route)(w, req)
 		})
 	}
+
+	// Register error endpoint if not overridden already
+	if !a.router.HasRoute("GET", "/error") {
+		a.router.Get("/error", func(c *Context) error {
+			err := c.PopSession("error").(string)
+			return c.Status(500).HTML([]byte("<html><body><code>" + err + "</code></body></html>"))
+		})
+	}
+
+	a.router.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	a.router.mux.Handle("GET /public/", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
 }
 
-func makeHandlerFunc(app *App, route *Route, router *Router) http.HandlerFunc {
+func makeHandlerFunc(app *Application, route *Route) http.HandlerFunc {
 	fn := func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Handling request for route: %s %s, router: %p", route.Method, route.Path, router)
+		slog.Debug("Handling request for route: %s %s", route.Method, route.Path)
 		if route.router == nil {
-			log.Printf("WARNING: route.router is nil for %s %s", route.Method, route.Path)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
 
-		token := app.Session().Token(r.Context())
+		var sess *session.Session
+		if err := app.Service(&sess); err != nil {
+			slog.Error(err.Error())
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		token := sess.Token(r.Context())
 		if token != "" {
 			r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
-			log.Println("Current SessionID: ", token)
+			slog.Debug("Current session ID: ", token)
 		}
 
 		allHandlers := append(append([]Handler{}, route.BeforeMiddleware...), route.Handlers...)
@@ -383,7 +307,6 @@ func makeHandlerFunc(app *App, route *Route, router *Router) http.HandlerFunc {
 		}
 
 		if err := ctx.Next(); err != nil {
-			logger.V().Error(err.Error())
 			if errors.As(err, &shared.ValidationErrors{}) {
 				ctx.ValidationError(err)
 				return
@@ -395,51 +318,92 @@ func makeHandlerFunc(app *App, route *Route, router *Router) http.HandlerFunc {
 				return
 			}
 
+			if errors.As(err, &M{}) {
+				ctx.JSON(err.(M))
+				return
+			}
+
 			ctx.Error(http.StatusInternalServerError, err)
 			return
 		}
 	}
 
-	if app.i != nil {
-		return app.Inertia().Middleware(http.HandlerFunc(fn)).ServeHTTP
+	i := &gonertia.Inertia{}
+
+	if app.Service(i) == nil {
+		return i.Middleware(http.HandlerFunc(fn)).ServeHTTP
 	}
 
 	return fn
 }
 
-func (app *App) Run() {
-	app.registerServiceProviders([]ServiceProvider{
-		&DatabaseServiceProvider{},
-		&SessionServiceProvider{},
-		&AuthServiceProvider{},
-	})
-
-	app.registerMiddlewares()
-
-	// Call the route registrar function here
-	if app.routeRegistrar != nil {
-		app.routeRegistrar(app.router)
+func (a *Application) Run() {
+	// Check if the main config is nil
+	if a.config == nil {
+		panic("main configuration is missing")
 	}
 
-	app.registerRoutes()
-
-	app.router.Handle("GET /static/*", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-
-	app.router.Handle("GET /public/*", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
-
-	for _, plugin := range app.plugins {
-		if err := plugin.Boot(app); err != nil {
-			panic(err)
-		}
+	// Check if the app configuration is nil
+	if a.config.Get("app") == nil {
+		panic("app configuration is missing")
 	}
 
-	slog.Info(fmt.Sprintf("%s is running on port %d...", config.Get[string]("app.name"), config.Get[int]("app.port")))
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", config.Get[int]("app.port")), app.session.LoadAndSave(app.router)); err != nil {
+	// Check if the database configuration is nil
+	if a.config.Get("database") == nil {
+		panic("database configuration is missing")
+	}
+
+	// Check if the redis configuration is nil
+	if a.config.Get("redis") == nil {
+		panic("redis configuration is missing")
+	}
+
+	// Check if the session configuration is nil
+	if a.config.Get("session") == nil {
+		panic("session configuration is missing")
+	}
+
+	// Check if the filesystem configuration is nil
+	if a.config.Get("filesystems") == nil {
+		panic("filesystem configuration is missing")
+	}
+
+	a.registerServiceProviders()
+
+	if a.RunningInConsole() {
+		a.registerCommands()
+	}
+
+	a.registerMiddlewares()
+
+	a.registerRoutes()
+
+	if a.RunningInConsole() {
+		a.shutDown()
+		os.Exit(0)
+	}
+
+	var sess *session.Session
+	if err := a.Service(&sess); &sess == nil || err != nil {
 		panic(err)
 	}
+
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", a.config.Get("app.port", 3000)),
+		Handler: sess.LoadAndSave(a.router),
+	}
+
+	// Start the server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+	slog.Info(fmt.Sprintf("%s is running on port %d, Press Ctrl+C to close the server...", a.config.Get("app.name", "Lemmego"), a.config.Get("app.port", 3000)))
+	a.HandleSignals(srv)
 }
 
-func (app *App) HandleSignals() {
+func (a *Application) HandleSignals(srv *http.Server) {
 	signalChannel := make(chan os.Signal, 1)
 	signal.Notify(signalChannel,
 		syscall.SIGINT,
@@ -449,17 +413,31 @@ func (app *App) HandleSignals() {
 	sig := <-signalChannel
 	switch sig {
 	case syscall.SIGINT, syscall.SIGTERM:
-		app.shutDown()
+		// Gracefully shutdown the server
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Server forced to shutdown: %v", err)
+		}
+
+		// Close database connections
+		a.shutDown()
 		os.Exit(0)
 	}
 }
 
-func (app *App) shutDown() {
-	log.Println("Shutting down application...")
-	dbName := app.db.Name()
-	err := app.db.Close()
-	if err != nil {
-		log.Fatal("Error closing database connection:", err)
+func (a *Application) shutDown() {
+	if !a.RunningInConsole() {
+		slog.Info("Shutting down application...")
 	}
-	log.Println("Database connection", dbName, "closed.")
+
+	for _, conn := range db.DM().All() {
+		err := conn.Close()
+		if err != nil {
+			log.Fatal(fmt.Sprintf("Error closing database connection: %s", conn.ConnName()), err)
+		}
+		if !a.RunningInConsole() {
+			slog.Info(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
+		}
+	}
 }

@@ -2,23 +2,12 @@ package utils
 
 import (
 	"encoding/json"
-	"log"
-	"log/slog"
 	"math/rand"
 	"time"
 
-	"github.com/joho/godotenv"
+	_ "github.com/joho/godotenv/autoload"
 	"golang.org/x/crypto/bcrypt"
 )
-
-func init() {
-	slog.Info("Loading .env file...")
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
-	slog.Info(".env file loaded...")
-}
 
 // GenerateRandomString generates a random string of a given length using the characters provided.
 func GenerateRandomString(length int) string {
@@ -49,4 +38,18 @@ func PrettyPrint(data map[string]interface{}) (string, error) {
 func Bcrypt(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	return string(bytes), err
+}
+
+// StructToMap converts any struct to map[string]interface{}
+func StructToMap(obj interface{}) (map[string]interface{}, error) {
+	data, err := json.Marshal(obj) // Convert to JSON
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]interface{}
+	err = json.Unmarshal(data, &ret) // Convert back to map
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
 }

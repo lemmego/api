@@ -10,7 +10,7 @@ import (
 const (
 	DialectSQLite   = "sqlite"
 	DialectMySQL    = "mysql"
-	DialectPostgres = "postgres"
+	DialectPostgres = "pgsql"
 )
 
 var (
