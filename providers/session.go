@@ -21,7 +21,7 @@ func init() {
 			Domain:   sessionConfig.(config.M)["domain"].(string),
 			HttpOnly: sessionConfig.(config.M)["http_only"].(bool),
 			Path:     sessionConfig.(config.M)["path"].(string),
-			Persist:  true,
+			Persist:  false,
 			SameSite: sessionConfig.(config.M)["same_site"].(http.SameSite),
 			Secure:   sessionConfig.(config.M)["secure"].(bool),
 		}
@@ -38,7 +38,7 @@ func init() {
 			pool := &redis.Pool{
 				MaxIdle: 10,
 				Dial: func() (redis.Conn, error) {
-					conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%d", config.Get("database.redis.connections.default.host").(string), config.Get("database.redis.connections.default.port").(int)))
+					conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%d", config.Get("redis.connections.default.host").(string), config.Get("redis.connections.default.port").(int)))
 					if err != nil {
 						return nil, fmt.Errorf("failed to connect to redis: %v", err)
 					}

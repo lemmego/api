@@ -14,8 +14,6 @@ func matchedToken(c *app.Context) bool {
 	sessionToken := c.GetSessionString("_token")
 	token := getTokenFromRequest(c)
 
-	println("sessionToken", sessionToken, "inputToken", token)
-
 	matched := false
 	if sessionToken != "" && token != "" {
 		matched = sessionToken == token

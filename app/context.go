@@ -327,10 +327,12 @@ func (c *Context) Inertia(filePath string, props map[string]any) error {
 }
 
 func (c *Context) Redirect(url string) error {
-	var i *inertia.Inertia
-	if c.App().Service(&i) != nil {
-		i.Redirect(c.ResponseWriter(), c.Request(), url)
-		return nil
+	if c.IsInertiaRequest() {
+		var i *inertia.Inertia
+		if c.App().Service(&i) != nil {
+			i.Redirect(c.ResponseWriter(), c.Request(), url)
+			return nil
+		}
 	}
 
 	c.writer.Header().Set("Location", url)
@@ -733,6 +735,11 @@ func (c *Context) Forbidden(err error) error {
 
 func (c *Context) PageExpired() error {
 	return c.Error(419, errors.New("page expired"))
+}
+
+func (c *Context) NoContent() error {
+	c.Status(204).writer.Write(nil)
+	return nil
 }
 
 func (c *Context) DecodeJSON(v interface{}) error {

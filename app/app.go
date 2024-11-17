@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/api/req"
@@ -66,7 +67,6 @@ type Bootstrapper interface {
 	WithConfig(c config.M) Bootstrapper
 	WithCommands(commands []Command) Bootstrapper
 	WithRoutes(routeCallback RouteCallback) Bootstrapper
-	HandleSignals()
 	Run()
 }
 
@@ -318,6 +318,11 @@ func makeHandlerFunc(app *Application, route *Route) http.HandlerFunc {
 				return
 			}
 
+			if errors.As(err, &M{}) {
+				ctx.JSON(err.(M))
+				return
+			}
+
 			ctx.Error(http.StatusInternalServerError, err)
 			return
 		}
@@ -353,13 +358,14 @@ func (a *Application) Run() {
 		panic("redis configuration is missing")
 	}
 
+	// Check if the session configuration is nil
+	if a.config.Get("session") == nil {
+		panic("session configuration is missing")
+	}
+
 	// Check if the filesystem configuration is nil
 	if a.config.Get("filesystems") == nil {
 		panic("filesystem configuration is missing")
-	}
-
-	if !a.RunningInConsole() {
-		slog.Info("app will start using the following config:\n", "config", a.config.GetAll())
 	}
 
 	a.registerServiceProviders()
@@ -382,13 +388,22 @@ func (a *Application) Run() {
 		panic(err)
 	}
 
-	slog.Info(fmt.Sprintf("%s is running on port %d...\n\nPress Ctrl+C to close the server", a.config.Get("app.name", "Lemmego"), a.config.Get("app.port", 3000)))
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", a.config.Get("app.port", 3000)), sess.LoadAndSave(a.router)); err != nil {
-		panic(err)
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", a.config.Get("app.port", 3000)),
+		Handler: sess.LoadAndSave(a.router),
 	}
+
+	// Start the server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+	slog.Info(fmt.Sprintf("%s is running on port %d, Press Ctrl+C to close the server...", a.config.Get("app.name", "Lemmego"), a.config.Get("app.port", 3000)))
+	a.HandleSignals(srv)
 }
 
-func (a *Application) HandleSignals() {
+func (a *Application) HandleSignals(srv *http.Server) {
 	signalChannel := make(chan os.Signal, 1)
 	signal.Notify(signalChannel,
 		syscall.SIGINT,
@@ -398,6 +413,14 @@ func (a *Application) HandleSignals() {
 	sig := <-signalChannel
 	switch sig {
 	case syscall.SIGINT, syscall.SIGTERM:
+		// Gracefully shutdown the server
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Server forced to shutdown: %v", err)
+		}
+
+		// Close database connections
 		a.shutDown()
 		os.Exit(0)
 	}

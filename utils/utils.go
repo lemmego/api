@@ -39,3 +39,17 @@ func Bcrypt(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	return string(bytes), err
 }
+
+// StructToMap converts any struct to map[string]interface{}
+func StructToMap(obj interface{}) (map[string]interface{}, error) {
+	data, err := json.Marshal(obj) // Convert to JSON
+	if err != nil {
+		return nil, err
+	}
+	var ret map[string]interface{}
+	err = json.Unmarshal(data, &ret) // Convert back to map
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
