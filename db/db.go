@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"gorm.io/driver/sqlite"
 	"log/slog"
 	"os"
 	"strconv"
@@ -60,6 +61,10 @@ func Get(connName ...string) *Connection {
 	}
 
 	return c
+}
+
+func DB() *gorm.DB {
+	return Get().DB()
 }
 
 func AddConnection(conn *Connection) *DatabaseManager {
@@ -251,6 +256,28 @@ func (c *Connection) WithDatabase(database string) *Connection {
 	return c
 }
 
+func (c *Connection) connectToSQLite() error {
+	dbConfig := c.config
+	dsn := &DataSource{
+		Dialect: DialectSQLite,
+		Name:    dbConfig.Database,
+		Params:  dbConfig.Params,
+	}
+	dsnStr, err := dsn.String()
+
+	if err != nil {
+		return err
+	}
+
+	db, err := gorm.Open(sqlite.Open(dsnStr), &gorm.Config{})
+	if err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	c.db = db
+	return nil
+}
+
 func (c *Connection) connectToMySQL() error {
 	dbConfig := c.config
 	dsn := &DataSource{
@@ -397,24 +424,23 @@ func (c *Connection) Open() (*Connection, error) {
 	}
 
 	switch c.config.Driver {
+	case DialectSQLite:
+		err := c.connectToSQLite()
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
 	case DialectMySQL:
 		err := c.connectToMySQL()
 		if err != nil {
 			return nil, err
 		}
-		//sqlDB, _ := c.db.DB()
-		//sqlDB.SetMaxIdleConns(10)
-		//sqlDB.SetMaxOpenConns(100)
-		//sqlDB.SetConnMaxLifetime(time.Hour)
-
-		//dbInstances[c.config.ConnName] = db
 		return c, nil
 	case DialectPostgres:
 		err := c.connectToPostgres()
 		if err != nil {
 			return nil, err
 		}
-		//dbInstances[c.config.ConnName] = db
 		return c, nil
 	default:
 		return nil, ErrUnknownDriver
