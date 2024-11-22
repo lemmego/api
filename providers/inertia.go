@@ -4,6 +4,8 @@ import (
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/res"
 	"github.com/romsar/gonertia"
+	"os"
+	"strings"
 )
 
 func init() {
@@ -16,7 +18,28 @@ func init() {
 			gonertia.WithFlashProvider(res.NewInertiaFlashProvider()),
 		)
 
-		i.ShareTemplateFunc("vite", res.Vite(res.InertiaManifestPath, res.InertiaBuildPath))
+		_, err := os.Stat(res.ViteHotPath)
+		if err == nil {
+			i.ShareTemplateFunc("vite", func(entry string) (string, error) {
+				content, err := os.ReadFile(res.ViteHotPath)
+				if err != nil {
+					return "", err
+				}
+				url := strings.TrimSpace(string(content))
+				if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+					url = url[strings.Index(url, ":")+1:]
+				} else {
+					url = "//localhost:5173"
+				}
+				if entry != "" && !strings.HasPrefix(entry, "/") {
+					entry = "/" + entry
+				}
+				return url + entry, nil
+			})
+		} else {
+			i.ShareTemplateFunc("vite", res.Vite(res.InertiaManifestPath, res.InertiaBuildPath))
+		}
+
 		i.ShareTemplateData("env", a.Config().Get("app.env"))
 
 		a.AddService(i)

@@ -10,6 +10,7 @@ import (
 	"path"
 )
 
+const ViteHotPath = "./public/hot"
 const InertiaRootTemplatePath = "resources/views/root.html"
 const InertiaManifestPath = "./public/build/manifest.json"
 const InertiaBuildPath = "/public/build/"
@@ -63,13 +64,18 @@ func Vite(manifestPath, buildDir string) func(path string) (string, error) {
 		Source string `json:"src"`
 	})
 	err = json.NewDecoder(f).Decode(&viteAssets)
+	// print content of viteAssets
+	for k, v := range viteAssets {
+		log.Printf("%s: %s\n", k, v.File)
+	}
+
 	if err != nil {
 		log.Fatalf("cannot unmarshal vite manifest file to json: %s", err)
 	}
 
 	return func(p string) (string, error) {
 		if val, ok := viteAssets[p]; ok {
-			return path.Join(buildDir, val.File), nil
+			return path.Join("/", buildDir, val.File), nil
 		}
 		return "", fmt.Errorf("asset %q not found", p)
 	}
