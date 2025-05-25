@@ -1,14 +1,27 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"github.com/lemmego/api/app"
+	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/req"
 	inertia "github.com/romsar/gonertia"
+	"log/slog"
 	"net/http"
 	"strings"
-
-	"github.com/lemmego/api/app"
-	"github.com/lemmego/api/req"
-	"github.com/lemmego/api/utils"
+	"time"
 )
+
+func getRandomToken(length int) string {
+	b := make([]byte, length)
+	_, err := rand.Read(b)
+	if err != nil {
+		slog.Error("Critical error generating random token:", err)
+		panic("Failed to generate CSRF token")
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
 
 func matchedToken(c *app.Context) bool {
 	sessionToken := c.GetSessionString("_token")
@@ -20,7 +33,7 @@ func matchedToken(c *app.Context) bool {
 	}
 
 	if matched {
-		c.PutSession("_token", utils.GenerateRandomString(40))
+		c.PutSession("_token", getRandomToken(40))
 	}
 
 	return matched
@@ -60,7 +73,7 @@ func VerifyCSRF(c *app.Context) error {
 			if val, ok := c.GetSession("_token").(string); ok && val != "" {
 				token = val
 			} else {
-				token = utils.GenerateRandomString(40)
+				token = getRandomToken(40)
 			}
 			c.PutSession("_token", token)
 			c.Set("_token", token)
@@ -70,12 +83,14 @@ func VerifyCSRF(c *app.Context) error {
 				i.ShareProp("csrfToken", token)
 			}
 
-			http.SetCookie(c.ResponseWriter(), &http.Cookie{
-				Name:  "XSRF-TOKEN",
-				Value: token,
-				Path:  "/",
-				//HttpOnly: true,                 // Not accessible via JavaScript
-				Secure:   true,                 // Send only over HTTPS
+			c.SetCookie(&http.Cookie{
+				Name:     "XSRF-TOKEN",
+				Value:    token,
+				Expires:  time.Now().Add(config.Get("session.lifetime").(time.Duration)),
+				Path:     "/",
+				Domain:   "",
+				Secure:   c.App().InProduction(),
+				HttpOnly: false,
 				SameSite: http.SameSiteLaxMode, // Prevents the browser from sending this cookie along with cross-site requests
 			})
 		}

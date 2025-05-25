@@ -3,9 +3,9 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/lemmego/api/db"
 	"image"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/lemmego/db"
 
 	"github.com/google/uuid"
 	"github.com/lemmego/api/shared"
@@ -526,18 +528,47 @@ func (f *VField) HexColor() *VField {
 	return f
 }
 
+// Unique checks if the value is unique in the database
 func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
+	var conn *db.Connection
+	tableSplit := strings.Split(table, ".")
 
-	query := db.Get().DB().Table(table).Where(fmt.Sprintf("%s = ?", column), f.value)
+	if len(tableSplit) > 1 {
+		conn = db.Get(tableSplit[0])
+		table = tableSplit[1]
+	} else {
+		conn = db.Get()
+	}
 
+	// Start building the query with placeholders
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ?", table, column)
+	args := []interface{}{f.value}
+
+	// Add additional where clauses with placeholders
 	if len(whereClauses) > 0 {
-		for key, value := range whereClauses[0] {
-			query = query.Where(key, value)
+		for _, whereClause := range whereClauses {
+			for key, value := range whereClause {
+				query += fmt.Sprintf(" AND %s = ?", key)
+				args = append(args, value)
+			}
 		}
 	}
 
-	query.Count(&count)
+	stmt, err := conn.Prepare(query)
+	if err != nil {
+		log.Default().Println(err.Error())
+		f.vee.AddError(f.name, "Unable to prepare the query")
+		return f
+	}
+	defer stmt.Close()
+
+	err = stmt.QueryRow(args...).Scan(&count)
+	if err != nil {
+		log.Default().Println(err.Error())
+		f.vee.AddError(f.name, "Unable to execute the query")
+		return f
+	}
 
 	if count > 0 {
 		f.vee.AddError(f.name, "This field must be unique")

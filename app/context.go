@@ -66,18 +66,9 @@ func (c *Context) Next() error {
 }
 
 // SetCookie sets a cookie on the response writer
-// Example: // c.SetCookie("jwt", token, 60*60*24*7, "/", "", false, true)
-func (c *Context) SetCookie(name string, value string, maxAge int, path string, domain string, secure bool, httpOnly bool) {
-	cookie := &http.Cookie{
-		Name:     name,
-		Value:    value,
-		MaxAge:   maxAge,
-		Path:     path,
-		Domain:   domain,
-		Secure:   secure,
-		HttpOnly: httpOnly,
-	}
+func (c *Context) SetCookie(cookie *http.Cookie) *Context {
 	http.SetCookie(c.writer, cookie)
+	return c
 }
 
 func (c *Context) Cookie(name string) *http.Cookie {
@@ -124,7 +115,7 @@ func (c *Context) ParseInput(inputStruct any) error {
 
 	nameField := v.FieldByName("BaseInput")
 	if nameField.IsValid() && nameField.CanSet() {
-		i := &BaseInput{App: c.app, Ctx: c, Validator: NewValidator(c.app)}
+		i := &BaseInput{Validator: NewValidator(c.app), app: c.app, ctx: c}
 		nameField.Set(reflect.ValueOf(i))
 	}
 	return nil
@@ -218,8 +209,9 @@ func (c *Context) GetHeader(key string) string {
 	return c.request.Header.Get(key)
 }
 
-func (c *Context) SetHeader(key string, value string) {
+func (c *Context) SetHeader(key string, value string) *Context {
 	c.writer.Header().Add(key, value)
+	return c
 }
 
 func (c *Context) WantsJSON() bool {

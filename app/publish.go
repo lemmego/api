@@ -50,7 +50,7 @@ func init() {
 	publishCmd.PersistentFlags().StringVar(&tagsFlag, "tags", "", "Comma-separated tag names of package assets")
 }
 
-func publish(a *Application, publishables []*Publishable) *cobra.Command {
+func publish(publishables []*Publishable) *cobra.Command {
 	publishCmd.Run = func(cmd *cobra.Command, args []string) {
 		tags := []string{}
 		if tagsFlag != "" {

@@ -20,7 +20,7 @@ import (
 	"github.com/lemmego/api/req"
 	"github.com/lemmego/api/shared"
 
-	"github.com/lemmego/api/db"
+	"github.com/lemmego/db"
 	"github.com/lemmego/migration/cmd"
 )
 
@@ -79,7 +79,11 @@ type AppCore interface {
 	Config() config.Configuration
 	Router() Router
 	RunningInConsole() bool
+	Bootstrapped() bool
+	InProduction() bool
+	Env(environment string) bool
 	AddCommands(commands []Command)
+	AddPublishables(publishables []*Publishable)
 }
 
 type App interface {
@@ -104,7 +108,12 @@ type Application struct {
 	serviceRegistrarCallbacks []func(a App) error
 	bootStrapperCallbacks     []func(a App) error
 	commands                  []Command
+	middleware                []Handler
+	httpMiddleware            []HTTPMiddleware
 	runningInConsole          bool
+	bootstrapped              bool
+
+	publishables []*Publishable
 }
 
 type Options struct {
@@ -114,22 +123,6 @@ type Options struct {
 }
 
 type OptFunc func(opts *Options)
-
-func RegisterService(registrar func(a App) error) {
-	if instance == nil {
-		Get()
-	}
-
-	instance.serviceRegistrarCallbacks = append(instance.serviceRegistrarCallbacks, registrar)
-}
-
-func BootService(bootstrapper func(a App) error) {
-	if instance == nil {
-		Get()
-	}
-
-	instance.bootStrapperCallbacks = append(instance.bootStrapperCallbacks, bootstrapper)
-}
 
 func (a *Application) Router() Router {
 	return a.router
@@ -141,6 +134,14 @@ func (a *Application) Config() config.Configuration {
 
 func (a *Application) AddCommands(commands []Command) {
 	a.commands = append(a.commands, commands...)
+}
+
+func (a *Application) AddPublishables(publishables []*Publishable) {
+	if a.Bootstrapped() {
+		panic("cannot publish after app has been bootstrapped")
+	}
+
+	a.publishables = append(a.publishables, publishables...)
 }
 
 func WithConfig(config config.M) OptFunc {
@@ -185,8 +186,28 @@ func Configure(optFuncs ...OptFunc) AppEngine {
 	return i
 }
 
+func InProduction() bool {
+	return os.Getenv("APP_ENV") == "production"
+}
+
+func Env(environment string) bool {
+	return os.Getenv("APP_ENV") == environment
+}
+
+func (a *Application) InProduction() bool {
+	return InProduction()
+}
+
+func (a *Application) Env(environment string) bool {
+	return Env(environment)
+}
+
 func (a *Application) RunningInConsole() bool {
 	return a.runningInConsole
+}
+
+func (a *Application) Bootstrapped() bool {
+	return a.bootstrapped
 }
 
 // Service is a helper method to easily get a service
@@ -243,11 +264,22 @@ func (a *Application) registerServiceProviders() {
 			panic(err)
 		}
 	}
+
+	a.bootstrapped = true
+
 	return
 }
 
 func (a *Application) registerMiddlewares() {
-	// Register global middleware
+	if a.router != nil {
+		for _, middleware := range a.httpMiddleware {
+			a.router.Use(middleware)
+		}
+
+		for _, middleware := range a.middleware {
+			a.router.UseBefore(middleware)
+		}
+	}
 }
 
 func (a *Application) registerRoutes() {
@@ -371,6 +403,7 @@ func (a *Application) Run() {
 	a.registerServiceProviders()
 
 	if a.RunningInConsole() {
+		publish(a.publishables)
 		a.registerCommands()
 	}
 
@@ -431,13 +464,13 @@ func (a *Application) shutDown() {
 		slog.Info("Shutting down application...")
 	}
 
-	for _, conn := range db.DM().All() {
+	for name, conn := range db.DM().All() {
 		err := conn.Close()
 		if err != nil {
-			log.Fatal(fmt.Sprintf("Error closing database connection: %s", conn.ConnName()), err)
+			log.Fatal(fmt.Sprintf("Error closing database connection: %s", name), err)
 		}
 		if !a.RunningInConsole() {
-			slog.Info(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
+			slog.Info(fmt.Sprintf("Closing database connection: %s", name))
 		}
 	}
 }
