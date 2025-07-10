@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/session"
 	"github.com/romsar/gonertia"
 	"log"
@@ -32,19 +33,18 @@ var once sync.Once
 
 // Get returns the single instance of the app
 func Get() App {
-	if instance == nil {
-		once.Do(func() {
-			instance = &Application{
-				mu:                        sync.Mutex{},
-				Services:                  newServiceContainer(),
-				router:                    newRouter(),
-				config:                    config.GetInstance(),
-				serviceRegistrarCallbacks: []func(a App) error{},
-				bootStrapperCallbacks:     []func(a App) error{},
-				runningInConsole:          len(os.Args) > 1,
-			}
-		})
-	}
+	once.Do(func() {
+		instance = &Application{
+			mu: sync.Mutex{},
+			//Services:                  newServiceContainer(),
+			container:                 di.New(),
+			router:                    newRouter(),
+			config:                    config.GetInstance(),
+			serviceRegistrarCallbacks: []func(a App) error{},
+			bootStrapperCallbacks:     []func(a App) error{},
+			runningInConsole:          len(os.Args) > 1,
+		}
+	})
 	return instance
 }
 
@@ -101,6 +101,7 @@ type AppEngine interface {
 type Application struct {
 	//*container.Container
 	Services                  *ServiceContainer
+	container                 *di.Container
 	mu                        sync.Mutex
 	config                    config.Configuration
 	router                    *HTTPRouter
