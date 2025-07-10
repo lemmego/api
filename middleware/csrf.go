@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/req"
 	inertia "github.com/romsar/gonertia"
 	"log/slog"
@@ -78,8 +79,9 @@ func VerifyCSRF(c *app.Context) error {
 			c.PutSession("_token", token)
 			c.Set("_token", token)
 
-			var i *inertia.Inertia
-			if err := c.App().Service(&i); err == nil {
+			i, err := di.Resolve[*inertia.Inertia](c.App().Container())
+
+			if err == nil && i != nil {
 				i.ShareProp("csrfToken", token)
 			}
 

@@ -35,8 +35,7 @@ var once sync.Once
 func Get() App {
 	once.Do(func() {
 		instance = &Application{
-			mu: sync.Mutex{},
-			//Services:                  newServiceContainer(),
+			mu:                        sync.Mutex{},
 			container:                 di.New(),
 			router:                    newRouter(),
 			config:                    config.GetInstance(),
@@ -70,14 +69,10 @@ type Bootstrapper interface {
 	Run()
 }
 
-type ServiceRegistrar interface {
-	Service(serviceType interface{}) error
-	AddService(serviceType interface{})
-}
-
 type AppCore interface {
 	Config() config.Configuration
 	Router() Router
+	Container() *di.Container
 	RunningInConsole() bool
 	Bootstrapped() bool
 	InProduction() bool
@@ -87,20 +82,16 @@ type AppCore interface {
 }
 
 type App interface {
-	ServiceRegistrar
 	AppCore
 }
 
 type AppEngine interface {
 	Bootstrapper
-	ServiceRegistrar
 	AppCore
 }
 
 // Application is the main application
 type Application struct {
-	//*container.Container
-	Services                  *ServiceContainer
 	container                 *di.Container
 	mu                        sync.Mutex
 	config                    config.Configuration
@@ -124,6 +115,10 @@ type Options struct {
 }
 
 type OptFunc func(opts *Options)
+
+func (a *Application) Container() *di.Container {
+	return a.container
+}
 
 func (a *Application) Router() Router {
 	return a.router
@@ -209,16 +204,6 @@ func (a *Application) RunningInConsole() bool {
 
 func (a *Application) Bootstrapped() bool {
 	return a.bootstrapped
-}
-
-// Service is a helper method to easily get a service
-func (a *Application) Service(serviceType interface{}) error {
-	return a.Services.Get(serviceType)
-}
-
-// AddService is a helper method to easily add a service
-func (a *Application) AddService(serviceType interface{}) {
-	a.Services.Add(serviceType)
 }
 
 // WithConfig sets the config map to the current config instance
@@ -315,12 +300,13 @@ func makeHandlerFunc(app *Application, route *Route) http.HandlerFunc {
 			return
 		}
 
-		var sess *session.Session
-		if err := app.Service(&sess); err != nil {
+		sess, err := di.Resolve[*session.Session](app.Container())
+		if err != nil {
 			slog.Error(err.Error())
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
+
 		token := sess.Token(r.Context())
 		if token != "" {
 			r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
@@ -361,9 +347,7 @@ func makeHandlerFunc(app *Application, route *Route) http.HandlerFunc {
 		}
 	}
 
-	i := &gonertia.Inertia{}
-
-	if app.Service(i) == nil {
+	if i, err := di.Resolve[*gonertia.Inertia](app.Container()); err == nil && i != nil {
 		return i.Middleware(http.HandlerFunc(fn)).ServeHTTP
 	}
 
@@ -416,9 +400,9 @@ func (a *Application) Run() {
 		a.shutDown()
 		os.Exit(0)
 	}
+	sess, err := di.Resolve[*session.Session](a.Container())
 
-	var sess *session.Session
-	if err := a.Service(&sess); &sess == nil || err != nil {
+	if err != nil {
 		panic(err)
 	}
 

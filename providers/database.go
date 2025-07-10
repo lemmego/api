@@ -5,6 +5,7 @@ import (
 
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/db"
 )
 
@@ -20,8 +21,9 @@ func init() {
 		db.DM().Add("default", conn)
 		db.DM().Add(dbConfig.ConnName, conn)
 
-		a.AddService(db.DM())
-		return nil
+		return di.For[*db.DatabaseManager](a.Container()).
+			AsSingleton().
+			UseInstance(db.DM())
 	})
 }
 

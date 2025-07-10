@@ -8,6 +8,7 @@ import (
 	"github.com/gomodule/redigo/redis"
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/session"
 	"net/http"
 )
@@ -48,7 +49,8 @@ func init() {
 			session.Set(redisstore.New(pool), cookie)
 		}
 
-		a.AddService(session.Get())
-		return nil
+		return di.For[*session.Session](a.Container()).
+			AsSingleton().
+			UseInstance(session.Get())
 	})
 }
