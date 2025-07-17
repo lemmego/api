@@ -1,8 +1,11 @@
 package app
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/lemmego/api/db"
+	"github.com/lemmego/gpa"
 	"image"
 	"io"
 	"log"
@@ -16,8 +19,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/lemmego/db"
 
 	"github.com/google/uuid"
 	"github.com/lemmego/api/shared"
@@ -531,17 +532,14 @@ func (f *VField) HexColor() *VField {
 // Unique checks if the value is unique in the database
 func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
-	var conn *db.Connection
-	tableSplit := strings.Split(table, ".")
+	provider := db.DefaultSQLProvider()
+	sqlProvider, _ := gpa.AsSQLProvider(provider)
 
-	if len(tableSplit) > 1 {
-		conn = db.Get(tableSplit[0])
-		table = tableSplit[1]
-	} else {
-		conn = db.Get()
+	conn, ok := sqlProvider.DB().(sql.DB)
+	if !ok {
+		f.vee.AddError(f.name, "Database could not be resolved")
+		return f
 	}
-
-	// Start building the query with placeholders
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ?", table, column)
 	args := []interface{}{f.value}
 

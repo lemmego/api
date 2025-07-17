@@ -6,12 +6,69 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	_ "github.com/joho/godotenv/autoload"
 )
 
 // M is a type alias for a map of string to interface{}
 type M map[string]interface{}
+
+func (m M) String(key string, defaultVal ...string) string {
+	if val, ok := m[key].(string); ok {
+		return val
+	} else {
+		return defaultVal[0]
+	}
+}
+
+func (m M) Int(key string, defaultVal ...int) int {
+	if val, ok := m[key].(int); ok {
+		return val
+	} else {
+		return defaultVal[0]
+	}
+}
+
+func (m M) Int64(key string, defaultVal ...int64) int64 {
+	if val, ok := m[key].(int64); ok {
+		return val
+	} else {
+		return defaultVal[0]
+	}
+}
+
+func (m M) Bool(key string, defaultVal ...bool) bool {
+	if val, ok := m[key].(bool); ok {
+		return val
+	} else {
+		return defaultVal[0]
+	}
+}
+
+func (m M) Float64(key string, defaultVal ...float64) float64 {
+	if val, ok := m[key].(float64); ok {
+		return val
+	} else {
+		return defaultVal[0]
+	}
+}
+
+func (m M) Duration(key string, defaultVal ...time.Duration) time.Duration {
+	if val, ok := m[key].(time.Duration); ok {
+		return val
+	} else {
+		return defaultVal[0]
+	}
+}
+
+func (m M) Time(key string, defaultVal ...time.Time) time.Time {
+	if val, ok := m[key].(time.Time); ok {
+		return val
+	} else {
+		return defaultVal[0]
+	}
+}
 
 // config represents a nested configuration map with thread-safe operations
 type config struct {

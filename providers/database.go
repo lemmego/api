@@ -1,41 +1,40 @@
+//go:build ignore
+
 package providers
 
 import (
 	"fmt"
+	"github.com/lemmego/gpa"
+	"github.com/lemmego/gpagorm"
 
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
-	"github.com/lemmego/api/di"
-	"github.com/lemmego/db"
 )
 
 func init() {
 	app.RegisterService(func(a app.App) error {
 		dbConfig := GetConfig()
-		conn := db.NewConnection(dbConfig)
-		_, err := conn.Open()
+
+		provider, err := gpagorm.NewProvider(dbConfig)
 		if err != nil {
-			return fmt.Errorf("database: failed to open connection: %w", err)
+			return err
 		}
 
-		db.DM().Add("default", conn)
-		db.DM().Add(dbConfig.ConnName, conn)
+		gpa.RegisterDefault(provider)
 
-		return di.For[*db.DatabaseManager](a.Container()).
-			AsSingleton().
-			UseInstance(db.DM())
+		return nil
 	})
 }
 
-func GetConfig(connName ...string) *db.Config {
+func GetConfig(connName ...string) gpa.Config {
 	var name string
 	if len(connName) > 0 && connName[0] != "" {
 		name = connName[0]
 	} else {
 		name = "default"
 	}
-	defaultConnection := config.Get(fmt.Sprintf("database.%s", name))
-	connection := config.Get(fmt.Sprintf("database.connections.%s", defaultConnection))
+	defaultConnection := config.Get(fmt.Sprintf("sql.%s", name))
+	connection := config.Get(fmt.Sprintf("sql.connections.%s", defaultConnection))
 	driver := connection.(config.M)["driver"].(string)
 	database := connection.(config.M)["database"].(string)
 
@@ -43,18 +42,17 @@ func GetConfig(connName ...string) *db.Config {
 		panic("database: database and driver must be present")
 	}
 
-	dbConfig := &db.Config{
-		ConnName: defaultConnection.(string),
+	dbConfig := gpa.Config{
 		Driver:   driver,
 		Database: database,
 	}
 
-	if driver != db.DialectSQLite {
+	if driver != "sqlite" {
 		dbConfig.Host = config.Get(fmt.Sprintf("database.connections.%s.host", defaultConnection)).(string)
 		dbConfig.Port = config.Get(fmt.Sprintf("database.connections.%s.port", defaultConnection)).(int)
-		dbConfig.User = config.Get(fmt.Sprintf("database.connections.%s.user", defaultConnection)).(string)
+		dbConfig.Username = config.Get(fmt.Sprintf("database.connections.%s.user", defaultConnection)).(string)
 		dbConfig.Password = config.Get(fmt.Sprintf("database.connections.%s.password", defaultConnection)).(string)
-		dbConfig.Params = config.Get(fmt.Sprintf("database.connections.%s.params", defaultConnection)).(string)
+		dbConfig.Options = config.Get(fmt.Sprintf("database.connections.%s.options", defaultConnection)).(config.M)
 		//dbConfig.AutoCreate = config.Get(fmt.Sprintf("database.connections.%s.auto_create", defaultConnection)).(bool)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/session"
+	"github.com/lemmego/gpa"
 	"github.com/romsar/gonertia"
 	"log"
 	"log/slog"
@@ -21,7 +22,6 @@ import (
 	"github.com/lemmego/api/req"
 	"github.com/lemmego/api/shared"
 
-	"github.com/lemmego/db"
 	"github.com/lemmego/migration/cmd"
 )
 
@@ -365,14 +365,14 @@ func (a *Application) Run() {
 		panic("app configuration is missing")
 	}
 
-	// Check if the database configuration is nil
-	if a.config.Get("database") == nil {
-		panic("database configuration is missing")
+	// Check if the sql configuration is nil
+	if a.config.Get("sql") == nil {
+		panic("sql configuration is missing")
 	}
 
-	// Check if the redis configuration is nil
-	if a.config.Get("redis") == nil {
-		panic("redis configuration is missing")
+	// Check if the keyvalue configuration is nil
+	if a.config.Get("keyvalue") == nil {
+		panic("keyvalue configuration is missing")
 	}
 
 	// Check if the session configuration is nil
@@ -448,14 +448,8 @@ func (a *Application) shutDown() {
 	if !a.RunningInConsole() {
 		slog.Info("Shutting down application...")
 	}
-
-	for name, conn := range db.DM().All() {
-		err := conn.Close()
-		if err != nil {
-			log.Fatal(fmt.Sprintf("Error closing database connection: %s", name), err)
-		}
-		if !a.RunningInConsole() {
-			slog.Info(fmt.Sprintf("Closing database connection: %s", name))
-		}
+	err := gpa.Registry().RemoveAll()
+	if err != nil {
+		slog.Error(err.Error())
 	}
 }
