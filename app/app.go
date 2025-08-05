@@ -239,16 +239,50 @@ func (a *Application) registerCommands() {
 }
 
 func (a *Application) registerServiceProviders() {
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, len(a.serviceRegistrarCallbacks)+len(a.bootStrapperCallbacks))
+
+	// Register service providers in parallel
 	for _, callback := range a.serviceRegistrarCallbacks {
-		if err := callback(a); err != nil {
-			panic(err)
-		}
+		wg.Add(1)
+		go func(cb func(a App) error) {
+			defer wg.Done()
+			if err := cb(a); err != nil {
+				errorsCh <- err
+			}
+		}(callback)
 	}
 
+	// Wait for all service registrations to complete
+	wg.Wait()
+
+	// Check for errors from service registration
+	close(errorsCh)
+	for err := range errorsCh {
+		panic(err)
+	}
+
+	// Reopen channel for bootstrappers
+	errorsCh = make(chan error, len(a.bootStrapperCallbacks))
+
+	// Register bootstrappers in parallel
 	for _, callback := range a.bootStrapperCallbacks {
-		if err := callback(a); err != nil {
-			panic(err)
-		}
+		wg.Add(1)
+		go func(cb func(a App) error) {
+			defer wg.Done()
+			if err := cb(a); err != nil {
+				errorsCh <- err
+			}
+		}(callback)
+	}
+
+	// Wait for all bootstrappers to complete
+	wg.Wait()
+
+	// Check for errors from bootstrapping
+	close(errorsCh)
+	for err := range errorsCh {
+		panic(err)
 	}
 
 	a.bootstrapped = true
@@ -385,6 +419,7 @@ func (a *Application) Run() {
 		panic("filesystem configuration is missing")
 	}
 
+	// Register service providers first (needed for session dependency)
 	a.registerServiceProviders()
 
 	if a.RunningInConsole() {
@@ -392,16 +427,49 @@ func (a *Application) Run() {
 		a.registerCommands()
 	}
 
-	a.registerMiddlewares()
+	// Run middleware and route registration in parallel
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, 2)
 
-	a.registerRoutes()
+	// Register middlewares in parallel
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				errorsCh <- fmt.Errorf("middleware registration failed: %v", r)
+			}
+		}()
+		a.registerMiddlewares()
+	}()
+
+	// Register routes in parallel
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				errorsCh <- fmt.Errorf("route registration failed: %v", r)
+			}
+		}()
+		a.registerRoutes()
+	}()
+
+	// Wait for all parallel registrations to complete
+	wg.Wait()
+	close(errorsCh)
+
+	// Check for errors
+	for err := range errorsCh {
+		panic(err)
+	}
 
 	if a.RunningInConsole() {
 		a.shutDown()
 		os.Exit(0)
 	}
-	sess, err := di.Resolve[*session.Session](a.Container())
 
+	sess, err := di.Resolve[*session.Session](a.Container())
 	if err != nil {
 		panic(err)
 	}

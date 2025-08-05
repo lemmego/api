@@ -2,10 +2,10 @@ package app
 
 import (
 	"database/sql"
+
 	"encoding/json"
 	"fmt"
 	"github.com/lemmego/api/db"
-	"github.com/lemmego/gpa"
 	"image"
 	"io"
 	"log"
@@ -532,12 +532,14 @@ func (f *VField) HexColor() *VField {
 // Unique checks if the value is unique in the database
 func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
-	provider := db.DefaultSQLProvider()
-	sqlProvider, _ := gpa.AsSQLProvider(provider)
-
-	conn, ok := sqlProvider.DB().(sql.DB)
-	if !ok {
+	sp := db.SqlProvider()
+	if sp == nil {
 		f.vee.AddError(f.name, "Database could not be resolved")
+		return f
+	}
+	conn, ok := sp.DB().(*sql.DB)
+	if !ok {
+		f.vee.AddError(f.name, "Database could not be opened")
 		return f
 	}
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ?", table, column)
@@ -555,7 +557,7 @@ func (f *VField) Unique(table string, column string, whereClauses ...map[string]
 
 	stmt, err := conn.Prepare(query)
 	if err != nil {
-		log.Default().Println(err.Error())
+		log.Println(err.Error())
 		f.vee.AddError(f.name, "Unable to prepare the query")
 		return f
 	}
@@ -563,7 +565,7 @@ func (f *VField) Unique(table string, column string, whereClauses ...map[string]
 
 	err = stmt.QueryRow(args...).Scan(&count)
 	if err != nil {
-		log.Default().Println(err.Error())
+		log.Println(err.Error())
 		f.vee.AddError(f.name, "Unable to execute the query")
 		return f
 	}
