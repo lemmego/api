@@ -1,8 +1,6 @@
 // The file cache driver implementation for the cache package.
 package cache
 
-import ()
-
 type FileStore struct {
 	prefix string
 }
