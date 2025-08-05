@@ -2,6 +2,7 @@ package providers
 
 import (
 	"github.com/lemmego/api/app"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/res"
 	"github.com/romsar/gonertia"
 	"os"
@@ -42,7 +43,8 @@ func init() {
 
 		i.ShareTemplateData("env", a.Config().Get("app.env"))
 
-		a.AddService(i)
-		return nil
+		return di.For[*gonertia.Inertia](a.Container()).
+			AsSingleton().
+			UseInstance(i)
 	})
 }

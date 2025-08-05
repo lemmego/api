@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/session"
+	"github.com/lemmego/gpa"
 	"github.com/romsar/gonertia"
 	"log"
 	"log/slog"
@@ -20,7 +22,6 @@ import (
 	"github.com/lemmego/api/req"
 	"github.com/lemmego/api/shared"
 
-	"github.com/lemmego/api/db"
 	"github.com/lemmego/migration/cmd"
 )
 
@@ -32,19 +33,17 @@ var once sync.Once
 
 // Get returns the single instance of the app
 func Get() App {
-	if instance == nil {
-		once.Do(func() {
-			instance = &Application{
-				mu:                        sync.Mutex{},
-				Services:                  newServiceContainer(),
-				router:                    newRouter(),
-				config:                    config.GetInstance(),
-				serviceRegistrarCallbacks: []func(a App) error{},
-				bootStrapperCallbacks:     []func(a App) error{},
-				runningInConsole:          len(os.Args) > 1,
-			}
-		})
-	}
+	once.Do(func() {
+		instance = &Application{
+			mu:                        sync.Mutex{},
+			container:                 di.New(),
+			router:                    newRouter(),
+			config:                    config.GetInstance(),
+			serviceRegistrarCallbacks: []func(a App) error{},
+			bootStrapperCallbacks:     []func(a App) error{},
+			runningInConsole:          len(os.Args) > 1,
+		}
+	})
 	return instance
 }
 
@@ -70,33 +69,30 @@ type Bootstrapper interface {
 	Run()
 }
 
-type ServiceRegistrar interface {
-	Service(serviceType interface{}) error
-	AddService(serviceType interface{})
-}
-
 type AppCore interface {
 	Config() config.Configuration
 	Router() Router
+	Container() *di.Container
 	RunningInConsole() bool
+	Bootstrapped() bool
+	InProduction() bool
+	Env(environment string) bool
 	AddCommands(commands []Command)
+	AddPublishables(publishables []*Publishable)
 }
 
 type App interface {
-	ServiceRegistrar
 	AppCore
 }
 
 type AppEngine interface {
 	Bootstrapper
-	ServiceRegistrar
 	AppCore
 }
 
 // Application is the main application
 type Application struct {
-	//*container.Container
-	Services                  *ServiceContainer
+	container                 *di.Container
 	mu                        sync.Mutex
 	config                    config.Configuration
 	router                    *HTTPRouter
@@ -104,7 +100,12 @@ type Application struct {
 	serviceRegistrarCallbacks []func(a App) error
 	bootStrapperCallbacks     []func(a App) error
 	commands                  []Command
+	middleware                []Handler
+	httpMiddleware            []HTTPMiddleware
 	runningInConsole          bool
+	bootstrapped              bool
+
+	publishables []*Publishable
 }
 
 type Options struct {
@@ -115,20 +116,8 @@ type Options struct {
 
 type OptFunc func(opts *Options)
 
-func RegisterService(registrar func(a App) error) {
-	if instance == nil {
-		Get()
-	}
-
-	instance.serviceRegistrarCallbacks = append(instance.serviceRegistrarCallbacks, registrar)
-}
-
-func BootService(bootstrapper func(a App) error) {
-	if instance == nil {
-		Get()
-	}
-
-	instance.bootStrapperCallbacks = append(instance.bootStrapperCallbacks, bootstrapper)
+func (a *Application) Container() *di.Container {
+	return a.container
 }
 
 func (a *Application) Router() Router {
@@ -141,6 +130,14 @@ func (a *Application) Config() config.Configuration {
 
 func (a *Application) AddCommands(commands []Command) {
 	a.commands = append(a.commands, commands...)
+}
+
+func (a *Application) AddPublishables(publishables []*Publishable) {
+	if a.Bootstrapped() {
+		panic("cannot publish after app has been bootstrapped")
+	}
+
+	a.publishables = append(a.publishables, publishables...)
 }
 
 func WithConfig(config config.M) OptFunc {
@@ -185,18 +182,28 @@ func Configure(optFuncs ...OptFunc) AppEngine {
 	return i
 }
 
+func InProduction() bool {
+	return os.Getenv("APP_ENV") == "production"
+}
+
+func Env(environment string) bool {
+	return os.Getenv("APP_ENV") == environment
+}
+
+func (a *Application) InProduction() bool {
+	return InProduction()
+}
+
+func (a *Application) Env(environment string) bool {
+	return Env(environment)
+}
+
 func (a *Application) RunningInConsole() bool {
 	return a.runningInConsole
 }
 
-// Service is a helper method to easily get a service
-func (a *Application) Service(serviceType interface{}) error {
-	return a.Services.Get(serviceType)
-}
-
-// AddService is a helper method to easily add a service
-func (a *Application) AddService(serviceType interface{}) {
-	a.Services.Add(serviceType)
+func (a *Application) Bootstrapped() bool {
+	return a.bootstrapped
 }
 
 // WithConfig sets the config map to the current config instance
@@ -232,22 +239,67 @@ func (a *Application) registerCommands() {
 }
 
 func (a *Application) registerServiceProviders() {
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, len(a.serviceRegistrarCallbacks)+len(a.bootStrapperCallbacks))
+
+	// Register service providers in parallel
 	for _, callback := range a.serviceRegistrarCallbacks {
-		if err := callback(a); err != nil {
-			panic(err)
-		}
+		wg.Add(1)
+		go func(cb func(a App) error) {
+			defer wg.Done()
+			if err := cb(a); err != nil {
+				errorsCh <- err
+			}
+		}(callback)
 	}
 
-	for _, callback := range a.bootStrapperCallbacks {
-		if err := callback(a); err != nil {
-			panic(err)
-		}
+	// Wait for all service registrations to complete
+	wg.Wait()
+
+	// Check for errors from service registration
+	close(errorsCh)
+	for err := range errorsCh {
+		panic(err)
 	}
+
+	// Reopen channel for bootstrappers
+	errorsCh = make(chan error, len(a.bootStrapperCallbacks))
+
+	// Register bootstrappers in parallel
+	for _, callback := range a.bootStrapperCallbacks {
+		wg.Add(1)
+		go func(cb func(a App) error) {
+			defer wg.Done()
+			if err := cb(a); err != nil {
+				errorsCh <- err
+			}
+		}(callback)
+	}
+
+	// Wait for all bootstrappers to complete
+	wg.Wait()
+
+	// Check for errors from bootstrapping
+	close(errorsCh)
+	for err := range errorsCh {
+		panic(err)
+	}
+
+	a.bootstrapped = true
+
 	return
 }
 
 func (a *Application) registerMiddlewares() {
-	// Register global middleware
+	if a.router != nil {
+		for _, middleware := range a.httpMiddleware {
+			a.router.Use(middleware)
+		}
+
+		for _, middleware := range a.middleware {
+			a.router.UseBefore(middleware)
+		}
+	}
 }
 
 func (a *Application) registerRoutes() {
@@ -282,12 +334,13 @@ func makeHandlerFunc(app *Application, route *Route) http.HandlerFunc {
 			return
 		}
 
-		var sess *session.Session
-		if err := app.Service(&sess); err != nil {
+		sess, err := di.Resolve[*session.Session](app.Container())
+		if err != nil {
 			slog.Error(err.Error())
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
+
 		token := sess.Token(r.Context())
 		if token != "" {
 			r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
@@ -328,9 +381,7 @@ func makeHandlerFunc(app *Application, route *Route) http.HandlerFunc {
 		}
 	}
 
-	i := &gonertia.Inertia{}
-
-	if app.Service(i) == nil {
+	if i, err := di.Resolve[*gonertia.Inertia](app.Container()); err == nil && i != nil {
 		return i.Middleware(http.HandlerFunc(fn)).ServeHTTP
 	}
 
@@ -348,14 +399,14 @@ func (a *Application) Run() {
 		panic("app configuration is missing")
 	}
 
-	// Check if the database configuration is nil
-	if a.config.Get("database") == nil {
-		panic("database configuration is missing")
+	// Check if the sql configuration is nil
+	if a.config.Get("sql") == nil {
+		panic("sql configuration is missing")
 	}
 
-	// Check if the redis configuration is nil
-	if a.config.Get("redis") == nil {
-		panic("redis configuration is missing")
+	// Check if the keyvalue configuration is nil
+	if a.config.Get("keyvalue") == nil {
+		panic("keyvalue configuration is missing")
 	}
 
 	// Check if the session configuration is nil
@@ -368,23 +419,58 @@ func (a *Application) Run() {
 		panic("filesystem configuration is missing")
 	}
 
+	// Register service providers first (needed for session dependency)
 	a.registerServiceProviders()
 
 	if a.RunningInConsole() {
+		publish(a.publishables)
 		a.registerCommands()
 	}
 
-	a.registerMiddlewares()
+	// Run middleware and route registration in parallel
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, 2)
 
-	a.registerRoutes()
+	// Register middlewares in parallel
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				errorsCh <- fmt.Errorf("middleware registration failed: %v", r)
+			}
+		}()
+		a.registerMiddlewares()
+	}()
+
+	// Register routes in parallel
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				errorsCh <- fmt.Errorf("route registration failed: %v", r)
+			}
+		}()
+		a.registerRoutes()
+	}()
+
+	// Wait for all parallel registrations to complete
+	wg.Wait()
+	close(errorsCh)
+
+	// Check for errors
+	for err := range errorsCh {
+		panic(err)
+	}
 
 	if a.RunningInConsole() {
 		a.shutDown()
 		os.Exit(0)
 	}
 
-	var sess *session.Session
-	if err := a.Service(&sess); &sess == nil || err != nil {
+	sess, err := di.Resolve[*session.Session](a.Container())
+	if err != nil {
 		panic(err)
 	}
 
@@ -430,14 +516,8 @@ func (a *Application) shutDown() {
 	if !a.RunningInConsole() {
 		slog.Info("Shutting down application...")
 	}
-
-	for _, conn := range db.DM().All() {
-		err := conn.Close()
-		if err != nil {
-			log.Fatal(fmt.Sprintf("Error closing database connection: %s", conn.ConnName()), err)
-		}
-		if !a.RunningInConsole() {
-			slog.Info(fmt.Sprintf("Closing database connection: %s, with connected database %s", conn.ConnName(), conn.DBName()))
-		}
+	err := gpa.Registry().RemoveAll()
+	if err != nil {
+		slog.Error(err.Error())
 	}
 }

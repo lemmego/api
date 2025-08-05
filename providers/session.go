@@ -8,6 +8,7 @@ import (
 	"github.com/gomodule/redigo/redis"
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/session"
 	"net/http"
 )
@@ -38,7 +39,7 @@ func init() {
 			pool := &redis.Pool{
 				MaxIdle: 10,
 				Dial: func() (redis.Conn, error) {
-					conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%d", config.Get("redis.connections.default.host").(string), config.Get("redis.connections.default.port").(int)))
+					conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%d", config.Get("keyvalue.connections.redis.host").(string), config.Get("keyvalue.connections.redis.port").(int)))
 					if err != nil {
 						return nil, fmt.Errorf("failed to connect to redis: %v", err)
 					}
@@ -48,7 +49,8 @@ func init() {
 			session.Set(redisstore.New(pool), cookie)
 		}
 
-		a.AddService(session.Get())
-		return nil
+		return di.For[*session.Session](a.Container()).
+			AsSingleton().
+			UseInstance(session.Get())
 	})
 }

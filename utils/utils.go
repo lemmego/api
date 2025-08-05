@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"math/rand"
 	"time"
@@ -52,4 +53,14 @@ func StructToMap(obj interface{}) (map[string]interface{}, error) {
 		return nil, err
 	}
 	return ret, nil
+}
+
+func GenerateKey() ([]byte, error) {
+	key := make([]byte, 32)
+	_, err := rand.Read(key)
+	return key, err
+}
+
+func EncodeToBase64(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
 }

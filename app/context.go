@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/fs"
 	"github.com/lemmego/api/session"
 	"html/template"
@@ -66,18 +67,9 @@ func (c *Context) Next() error {
 }
 
 // SetCookie sets a cookie on the response writer
-// Example: // c.SetCookie("jwt", token, 60*60*24*7, "/", "", false, true)
-func (c *Context) SetCookie(name string, value string, maxAge int, path string, domain string, secure bool, httpOnly bool) {
-	cookie := &http.Cookie{
-		Name:     name,
-		Value:    value,
-		MaxAge:   maxAge,
-		Path:     path,
-		Domain:   domain,
-		Secure:   secure,
-		HttpOnly: httpOnly,
-	}
+func (c *Context) SetCookie(cookie *http.Cookie) *Context {
 	http.SetCookie(c.writer, cookie)
+	return c
 }
 
 func (c *Context) Cookie(name string) *http.Cookie {
@@ -124,7 +116,7 @@ func (c *Context) ParseInput(inputStruct any) error {
 
 	nameField := v.FieldByName("BaseInput")
 	if nameField.IsValid() && nameField.CanSet() {
-		i := &BaseInput{App: c.app, Ctx: c, Validator: NewValidator(c.app)}
+		i := &BaseInput{Validator: NewValidator(c.app), app: c.app, ctx: c}
 		nameField.Set(reflect.ValueOf(i))
 	}
 	return nil
@@ -218,8 +210,9 @@ func (c *Context) GetHeader(key string) string {
 	return c.request.Header.Get(key)
 }
 
-func (c *Context) SetHeader(key string, value string) {
+func (c *Context) SetHeader(key string, value string) *Context {
 	c.writer.Header().Add(key, value)
+	return c
 }
 
 func (c *Context) WantsJSON() bool {
@@ -306,9 +299,9 @@ func (c *Context) Render(tmplPath string, data *res.TemplateData) error {
 }
 
 func (c *Context) Inertia(filePath string, props map[string]any) error {
-	var i *inertia.Inertia
-	if c.App().Service(&i) != nil {
-		return errors.New("inertia not enabled")
+	i, err := di.Resolve[*inertia.Inertia](c.App().Container())
+	if i == nil || err != nil {
+		return fmt.Errorf("inertia not enabled: %w", err)
 	}
 
 	if errs := c.PopSession("errors"); errs != nil {
@@ -328,8 +321,8 @@ func (c *Context) Inertia(filePath string, props map[string]any) error {
 
 func (c *Context) Redirect(url string) error {
 	if c.IsInertiaRequest() {
-		var i *inertia.Inertia
-		if c.App().Service(&i) != nil {
+		i, err := di.Resolve[*inertia.Inertia](c.App().Container())
+		if err == nil && i != nil {
 			i.Redirect(c.ResponseWriter(), c.Request(), url)
 			return nil
 		}
@@ -384,8 +377,8 @@ func (c *Context) Back() error {
 		c.status = http.StatusFound
 	}
 
-	var i *inertia.Inertia
-	if c.App().Service(&i) == nil {
+	i, err := di.Resolve[*inertia.Inertia](c.App().Container())
+	if err == nil && i != nil {
 		i.Back(c.ResponseWriter(), c.Request(), c.status)
 		return nil
 	}
@@ -490,9 +483,9 @@ func (c *Context) Upload(uploadedFileName string, dir string, filename ...string
 			header.Filename = filename[0]
 		}
 
-		var fm *fs.FilesystemManager
+		fm, err := di.Resolve[*fs.FilesystemManager](c.App().Container())
 
-		if err := c.App().Service(&fm); err != nil {
+		if err != nil {
 			return nil, err
 		} else {
 			fss, err := fm.Get()
@@ -538,9 +531,9 @@ func (c *Context) File(path string, headers ...map[string][]string) error {
 }
 
 func (c *Context) StorageFile(path string, headers ...map[string][]string) error {
-	var fm *fs.FilesystemManager
+	fm, err := di.Resolve[*fs.FilesystemManager](c.App().Container())
 
-	if err := c.App().Service(&fm); err != nil {
+	if err != nil {
 		return err
 	}
 
@@ -581,9 +574,9 @@ func (c *Context) StorageFile(path string, headers ...map[string][]string) error
 }
 
 func (c *Context) Download(path string, filename string) error {
-	var fm *fs.FilesystemManager
+	fm, err := di.Resolve[*fs.FilesystemManager](c.App().Container())
 
-	if err := c.App().Service(&fm); err != nil {
+	if err != nil {
 		return err
 	}
 
@@ -633,9 +626,9 @@ func (c *Context) Get(key string) any {
 }
 
 func (c *Context) PutSession(key string, value any) *Context {
-	var sess *session.Session
+	sess, err := di.Resolve[*session.Session](c.App().Container())
 
-	if err := c.App().Service(&sess); err != nil {
+	if err != nil {
 		slog.Error(err.Error())
 		return nil
 	}
@@ -645,9 +638,9 @@ func (c *Context) PutSession(key string, value any) *Context {
 }
 
 func (c *Context) PopSession(key string) any {
-	var sess *session.Session
+	sess, err := di.Resolve[*session.Session](c.App().Container())
 
-	if err := c.App().Service(&sess); err != nil {
+	if err != nil {
 		slog.Error(err.Error())
 		return nil
 	}
@@ -656,9 +649,9 @@ func (c *Context) PopSession(key string) any {
 }
 
 func (c *Context) PopSessionString(key string) string {
-	var sess *session.Session
+	sess, err := di.Resolve[*session.Session](c.App().Container())
 
-	if err := c.App().Service(&sess); err != nil {
+	if err != nil {
 		slog.Error(err.Error())
 		return ""
 	}
@@ -667,9 +660,9 @@ func (c *Context) PopSessionString(key string) string {
 }
 
 func (c *Context) GetSession(key string) any {
-	var sess *session.Session
+	sess, err := di.Resolve[*session.Session](c.App().Container())
 
-	if err := c.App().Service(&sess); err != nil {
+	if err != nil {
 		slog.Error(err.Error())
 		return nil
 	}
@@ -678,9 +671,9 @@ func (c *Context) GetSession(key string) any {
 }
 
 func (c *Context) GetSessionString(key string) string {
-	var sess *session.Session
+	sess, err := di.Resolve[*session.Session](c.App().Container())
 
-	if err := c.App().Service(&sess); err != nil {
+	if err != nil {
 		slog.Error(err.Error())
 		return ""
 	}
