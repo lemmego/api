@@ -532,6 +532,12 @@ func (f *VField) HexColor() *VField {
 // Unique checks if the value is unique in the database
 func (f *VField) Unique(table string, column string, whereClauses ...map[string]interface{}) *VField {
 	var count int64
+
+	if table == "" {
+		f.vee.AddError(f.name, "Table name not provided for uniqueness check")
+		return f
+	}
+
 	sp := db.SqlProvider()
 	if sp == nil {
 		f.vee.AddError(f.name, "Database could not be resolved")
