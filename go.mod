@@ -2,11 +2,6 @@ module github.com/lemmego/api
 
 go 1.24.3
 
-replace (
-	github.com/lemmego/gpa => ../gpa
-	github.com/lemmego/gpagorm => ../gpagorm
-)
-
 require (
 	dario.cat/mergo v1.0.1
 	github.com/a-h/templ v0.2.771
@@ -20,8 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lemmego/fsys v0.0.0-20241023123145-f7699143d54c
-	github.com/lemmego/gpa v0.1.0
-	github.com/lemmego/gpagorm v0.1.0
+	github.com/lemmego/gpa v0.1.1
 	github.com/lemmego/migration v0.1.7
 	github.com/manifoldco/promptui v0.9.0
 	github.com/romsar/gonertia v1.3.0
@@ -55,29 +49,14 @@ require (
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
-	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
-	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/s2a-go v0.1.8 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/googleapis/gax-go/v2 v2.13.0 // indirect
-	github.com/huandu/go-sqlbuilder v1.33.1 // indirect
-	github.com/huandu/xstrings v1.4.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/jackc/pgpassfile v1.0.0 // indirect
-	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.6.0 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/jinzhu/inflection v1.0.0 // indirect
-	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
-	github.com/jmoiron/sqlx v1.4.0 // indirect
-	github.com/k0kubun/pp/v3 v3.4.1 // indirect
 	github.com/lib/pq v1.10.9 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.28 // indirect
-	github.com/microsoft/go-mssqldb v0.19.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	go.opencensus.io v0.24.0 // indirect
@@ -102,9 +81,5 @@ require (
 	google.golang.org/grpc v1.67.1 // indirect
 	google.golang.org/grpc/stats/opentelemetry v0.0.0-20241022174616-4bb0170ac65f // indirect
 	google.golang.org/protobuf v1.35.1 // indirect
-	gorm.io/driver/mysql v1.6.0 // indirect
-	gorm.io/driver/postgres v1.6.0 // indirect
-	gorm.io/driver/sqlite v1.6.0 // indirect
-	gorm.io/driver/sqlserver v1.6.0 // indirect
-	gorm.io/gorm v1.30.0 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
