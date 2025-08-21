@@ -5,24 +5,23 @@ import (
 	"fmt"
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/fsys"
-	"os"
 )
 
-type FilesystemManager struct {
+type FileSystem struct {
 	disks map[string]fsys.FS
 }
 
-func NewFilesystemManager() *FilesystemManager {
-	return &FilesystemManager{disks: map[string]fsys.FS{}}
+func NewFileSystem() *FileSystem {
+	return &FileSystem{disks: map[string]fsys.FS{}}
 }
 
-func (fm *FilesystemManager) Get(diskName ...string) (fsys.FS, error) {
+func (fm *FileSystem) Disk(diskName ...string) (fsys.FS, error) {
 	var name string
 
 	if len(diskName) > 0 {
 		name = diskName[0]
 	} else {
-		name = os.Getenv("FILESYSTEM_DISK")
+		name = config.MustEnv("FILESYSTEM_DISK", "local")
 	}
 
 	if name == "" {
@@ -30,13 +29,13 @@ func (fm *FilesystemManager) Get(diskName ...string) (fsys.FS, error) {
 	}
 
 	if _, ok := fm.disks[name]; !ok {
-		fm.disks[name] = Resolve(name)
+		fm.disks[name] = resolve(name)
 	}
 
 	return fm.disks[name], nil
 }
 
-func Resolve(name string) fsys.FS {
+func resolve(name string) fsys.FS {
 	if conf, ok := config.Get("filesystems.disks").(config.M)[name].(config.M); ok {
 		switch conf["driver"] {
 		case "local":

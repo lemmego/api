@@ -13,7 +13,7 @@ import (
 
 const HTTPInKey = "input"
 
-type Handler func(c *Context) error
+type Handler func(c Context) error
 
 type Middleware func(next Handler) Handler
 
@@ -221,7 +221,7 @@ func Input(inputStruct any, opts ...core.Option) Middleware {
 	}
 
 	return func(next Handler) Handler {
-		return func(ctx *Context) error {
+		return func(ctx Context) error {
 			input, err := co.Decode(ctx.Request())
 			if err != nil {
 				co.GetErrorHandler()(ctx.ResponseWriter(), ctx.Request(), err)

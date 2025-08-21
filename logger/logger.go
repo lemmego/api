@@ -36,7 +36,7 @@ func init() {
 }
 
 const (
-	timeFormat = "[15:04:05.000]"
+	timeFormat = "[15:04:05]"
 
 	reset = "\033[0m"
 
