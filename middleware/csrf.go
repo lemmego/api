@@ -5,9 +5,7 @@ import (
 	"encoding/base64"
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
-	"github.com/lemmego/api/di"
 	"github.com/lemmego/api/req"
-	inertia "github.com/romsar/gonertia"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -24,8 +22,8 @@ func getRandomToken(length int) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-func matchedToken(c *app.Context) bool {
-	sessionToken := c.GetSessionString("_token")
+func matchedToken(c app.HttpProvider) bool {
+	sessionToken := c.SessionString("_token")
 	token := getTokenFromRequest(c)
 
 	matched := false
@@ -40,8 +38,8 @@ func matchedToken(c *app.Context) bool {
 	return matched
 }
 
-func getTokenFromRequest(c *app.Context) string {
-	token := c.GetHeader("X-XSRF-TOKEN")
+func getTokenFromRequest(c app.HttpProvider) string {
+	token := c.Header("X-XSRF-TOKEN")
 	if token == "" {
 		token = c.Request().PostFormValue("_token")
 	}
@@ -67,11 +65,11 @@ func getTokenFromRequest(c *app.Context) string {
 	return token
 }
 
-func VerifyCSRF(c *app.Context) error {
+func VerifyCSRF(c app.Context) error {
 	if c.IsReading() || matchedToken(c) {
 		if c.WantsHTML() && !strings.HasPrefix(c.Request().URL.Path, "/static") {
 			token := ""
-			if val, ok := c.GetSession("_token").(string); ok && val != "" {
+			if val, ok := c.Session("_token").(string); ok && val != "" {
 				token = val
 			} else {
 				token = getRandomToken(40)
@@ -79,11 +77,12 @@ func VerifyCSRF(c *app.Context) error {
 			c.PutSession("_token", token)
 			c.Set("_token", token)
 
-			i, err := di.Resolve[*inertia.Inertia](c.App().Container())
-
-			if err == nil && i != nil {
-				i.ShareProp("csrfToken", token)
-			}
+			// TODO: Find a way to share the token with inertia
+			//i, err := di.Resolve[*inertia.Inertia](c.App().Container())
+			//
+			//if err == nil && i != nil {
+			//	i.ShareProp("csrfToken", token)
+			//}
 
 			c.SetCookie(&http.Cookie{
 				Name:     "XSRF-TOKEN",
