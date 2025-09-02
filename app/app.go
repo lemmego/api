@@ -57,7 +57,8 @@ type AppCore interface {
 	InProduction() bool
 	Env(environment string) bool
 	AddService(service any)
-	Service(service reflect.Type) any
+	Service(service any) any
+	EventEmitter
 }
 
 type App interface {
@@ -71,23 +72,28 @@ type AppEngine interface {
 
 // application is the main application
 type application struct {
-	mu                        sync.Mutex
-	config                    config.Configuration
-	router                    *HTTPRouter
-	session                   *session.Session
-	fileSystem                *fs.FileSystem
-	routeCallbacks            []RouteCallback
-	serviceRegistrarCallbacks []func(a App) error
-	bootStrapperCallbacks     []func(a App) error
-	commands                  []Command
-	middleware                []Handler
-	httpMiddleware            []HTTPMiddleware
-	runningInConsole          bool
-	bootstrapped              bool
+	mu               sync.Mutex
+	config           config.Configuration
+	router           *httpRouter
+	routeCallbacks   []RouteCallback
+	commands         []Command
+	middleware       []Handler
+	httpMiddleware   []HTTPMiddleware
+	runningInConsole bool
+	bootstrapped     bool
 
-	publishables    []*Publishable
+	publishables    []*publishable
 	providers       []Provider
-	serviceRegistry *ServiceRegistry
+	serviceRegistry *serviceRegistry
+	eventRegistry   *eventRegistry
+}
+
+func (a *application) On(event string, listener EventListener) {
+	a.eventRegistry.On(event, listener)
+}
+
+func (a *application) Dispatch(event string, payload ...any) {
+	a.eventRegistry.Dispatch(event, payload)
 }
 
 func (a *application) WithProviders(providers []Provider) Bootstrapper {
@@ -109,11 +115,11 @@ func (a *application) Router() Router {
 }
 
 func (a *application) Session() *session.Session {
-	return a.session
+	return Get[*session.Session](a)
 }
 
 func (a *application) FileSystem() *fs.FileSystem {
-	return a.fileSystem
+	return Get[*fs.FileSystem](a)
 }
 
 func (a *application) Config() config.Configuration {
@@ -124,8 +130,8 @@ func (a *application) AddService(service any) {
 	a.serviceRegistry.Register(service)
 }
 
-func (a *application) Service(service reflect.Type) any {
-	val, ok := a.serviceRegistry.GetByType(service)
+func (a *application) Service(service any) any {
+	val, ok := a.serviceRegistry.GetByType(reflect.TypeOf(service))
 	if !ok {
 		return nil
 	}
@@ -164,13 +170,12 @@ func Configure(optFuncs ...OptFunc) AppEngine {
 	}
 
 	i := &application{
-		mu:                        sync.Mutex{},
-		router:                    newRouter(),
-		config:                    config.GetInstance(),
-		serviceRegistrarCallbacks: []func(a App) error{},
-		bootStrapperCallbacks:     []func(a App) error{},
-		runningInConsole:          len(os.Args) > 1,
-		serviceRegistry:           NewServiceRegistry(),
+		mu:               sync.Mutex{},
+		router:           newRouter(),
+		config:           config.GetInstance(),
+		runningInConsole: len(os.Args) > 1,
+		serviceRegistry:  newServiceRegistry(),
+		eventRegistry:    newEventRegistry(),
 	}
 
 	if opts.Config != nil {
@@ -301,7 +306,7 @@ func (a *application) registerMiddlewares() {
 
 func (a *application) registerRoutes() {
 	for _, cb := range a.routeCallbacks {
-		cb(a.router)
+		cb(a)
 	}
 
 	for _, route := range a.router.routes {
@@ -323,7 +328,7 @@ func (a *application) registerRoutes() {
 	a.router.mux.Handle("GET /public/", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
 }
 
-func makeHandlerFunc(app *application, route *Route) http.HandlerFunc {
+func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("Handling request for route: %s %s", route.Method, route.Path)
 		if route.router == nil {
@@ -429,7 +434,9 @@ func (a *application) Run() {
 			}
 		}
 		publish(a.publishables)
+		a.Dispatch(CommandsRegistering)
 		a.registerCommands()
+		a.Dispatch(CommandsRegistered)
 	}
 
 	// Register middlewares and routes sequentially to avoid race conditions
@@ -445,7 +452,9 @@ func (a *application) Run() {
 				a.middleware = append(a.middleware, mwProvider.AddMiddlewares()...)
 			}
 		}
+		a.Dispatch(MiddlewareRegistering)
 		a.registerMiddlewares()
+		a.Dispatch(MiddlewareRegistered)
 	}()
 
 	func() {
@@ -459,24 +468,25 @@ func (a *application) Run() {
 				a.routeCallbacks = append(a.routeCallbacks, routeProvider.AddRoutes())
 			}
 		}
-		a.registerRoutes()
 	}()
+
+	// Register providers first so services are available for routes
+	a.Dispatch(ServicesRegistering)
+	a.registerProviders()
+	a.Dispatch(ServicesRegistered)
 
 	if a.RunningInConsole() {
 		a.shutDown()
 		os.Exit(0)
 	}
 
-	a.registerProviders()
-
-	fmt.Println("Registered services")
-
-	sess := Get[*session.Session](a)
-	a.session = sess
+	a.Dispatch(RoutesRegistering)
+	a.registerRoutes()
+	a.Dispatch(RoutesRegistered)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", a.config.Get("app.port", 3000)),
-		Handler: sess.LoadAndSave(a.router),
+		Handler: a.Session().LoadAndSave(a.router),
 	}
 
 	// Start the server in a goroutine
@@ -486,6 +496,7 @@ func (a *application) Run() {
 		}
 	}()
 	slog.Info(fmt.Sprintf("%s is running on port %d, Press Ctrl+C to close the server...", a.config.Get("app.name", "Lemmego"), a.config.Get("app.port", 3000)))
+	a.Dispatch(ServerStarted)
 	a.HandleSignals(srv)
 }
 

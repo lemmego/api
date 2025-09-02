@@ -5,19 +5,19 @@ import (
 	"sync"
 )
 
-type ServiceRegistry struct {
+type serviceRegistry struct {
 	mu       sync.RWMutex
 	services map[reflect.Type]any
 }
 
-func NewServiceRegistry() *ServiceRegistry {
-	return &ServiceRegistry{
+func newServiceRegistry() *serviceRegistry {
+	return &serviceRegistry{
 		mu:       sync.RWMutex{},
 		services: make(map[reflect.Type]any),
 	}
 }
 
-func (r *ServiceRegistry) Register(p any) {
+func (r *serviceRegistry) Register(p any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.services[reflect.TypeOf(p)]; ok {
@@ -26,7 +26,7 @@ func (r *ServiceRegistry) Register(p any) {
 	r.services[reflect.TypeOf(p)] = p
 }
 
-func (r *ServiceRegistry) All() []any {
+func (r *serviceRegistry) All() []any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]any, 0, len(r.services))
@@ -36,7 +36,7 @@ func (r *ServiceRegistry) All() []any {
 	return out
 }
 
-func (r *ServiceRegistry) Get(p any) (any, bool) {
+func (r *serviceRegistry) Get(p any) (any, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	service, ok := r.services[reflect.TypeOf(p)]
@@ -44,7 +44,7 @@ func (r *ServiceRegistry) Get(p any) (any, bool) {
 }
 
 // GetByType is more efficient - no need to create instance
-func (r *ServiceRegistry) GetByType(t reflect.Type) (any, bool) {
+func (r *serviceRegistry) GetByType(t reflect.Type) (any, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	service, ok := r.services[t]
@@ -52,7 +52,7 @@ func (r *ServiceRegistry) GetByType(t reflect.Type) (any, bool) {
 }
 
 // GetTyped provides type-safe service retrieval
-func GetTyped[T any](r *ServiceRegistry) (T, bool) {
+func GetTyped[T any](r *serviceRegistry) (T, bool) {
 	var zero T
 	service, ok := r.GetByType(reflect.TypeOf(zero))
 	if !ok {
@@ -63,7 +63,7 @@ func GetTyped[T any](r *ServiceRegistry) (T, bool) {
 }
 
 // Remove unregisters a service
-func (r *ServiceRegistry) Remove(p Provider) bool {
+func (r *serviceRegistry) Remove(p Provider) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	t := reflect.TypeOf(p)
@@ -75,21 +75,21 @@ func (r *ServiceRegistry) Remove(p Provider) bool {
 }
 
 // Clear removes all providers
-func (r *ServiceRegistry) Clear() {
+func (r *serviceRegistry) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.services = make(map[reflect.Type]any)
 }
 
 // Count returns the number of registered providers
-func (r *ServiceRegistry) Count() int {
+func (r *serviceRegistry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.services)
 }
 
 // Has checks if a service type is registered
-func (r *ServiceRegistry) Has(p any) bool {
+func (r *serviceRegistry) Has(p any) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	_, exists := r.services[reflect.TypeOf(p)]

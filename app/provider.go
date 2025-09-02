@@ -1,9 +1,7 @@
 package app
 
-import "reflect"
-
 type Provider interface {
-	// Provide provides the services
+	// Provide provides the events
 	Provide(a App) error
 }
 
@@ -24,10 +22,10 @@ type MiddlewareProvider interface {
 
 type PublishableProvider interface {
 	// AddPublishables publishes the publishable assets
-	AddPublishables() []*Publishable
+	AddPublishables() []*publishable
 }
 
 func Get[T any](a App) T {
 	var zero T
-	return a.Service(reflect.TypeOf(zero)).(T)
+	return a.Service(zero).(T)
 }

@@ -14,13 +14,13 @@ var tagsFlag string
 
 var publishCmd = &cobra.Command{Use: "publish"}
 
-type Publishable struct {
+type publishable struct {
 	FilePath string
 	Content  []byte
 	Tag      string
 }
 
-func (p *Publishable) Publish() error {
+func (p *publishable) Publish() error {
 	filePath := p.FilePath
 
 	if _, err := os.Stat(filePath); err != nil {
@@ -50,7 +50,7 @@ func init() {
 	publishCmd.PersistentFlags().StringVar(&tagsFlag, "tags", "", "Comma-separated tag names of package assets")
 }
 
-func publish(publishables []*Publishable) *cobra.Command {
+func publish(publishables []*publishable) *cobra.Command {
 	publishCmd.Run = func(cmd *cobra.Command, args []string) {
 		tags := []string{}
 		if tagsFlag != "" {

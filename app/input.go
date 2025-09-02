@@ -3,9 +3,9 @@ package app
 import "github.com/ggicci/httpin"
 
 type BaseInput struct {
-	*Validator
+	*validator
 	app App
-	ctx *ctx
+	ctx Context
 }
 
 type FileInput struct {
@@ -16,7 +16,7 @@ func (bi *BaseInput) App() AppCore {
 	return bi.app
 }
 
-func (bi *BaseInput) Ctx() *ctx {
+func (bi *BaseInput) Ctx() Context {
 	return bi.ctx
 }
 
