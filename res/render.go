@@ -2,9 +2,10 @@ package res
 
 import (
 	"fmt"
+	"github.com/lemmego/api/app"
 	"html/template"
+	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,20 +15,76 @@ import (
 
 var templateCache map[string]*template.Template
 
-type AlertMessage struct {
-	Type string // success, error, warning, info, debug
-	Body string
+// Renderer defines the interface for types that can render content.
+type Renderer interface {
+	Render(w io.Writer) error
 }
 
-type TemplateData struct {
-	StringMap        map[string]string
-	IntMap           map[string]int
-	FloatMap         map[string]float64
-	BoolMap          map[string]bool
-	FuncMap          template.FuncMap
-	Data             map[string]any
-	ValidationErrors shared.ValidationErrors
-	Messages         []*AlertMessage
+type Template struct {
+	File             string
+	stringMap        map[string]string
+	intMap           map[string]int
+	floatMap         map[string]float64
+	boolMap          map[string]bool
+	funcMap          template.FuncMap
+	data             map[string]any
+	validationErrors shared.ValidationErrors
+	ctx              app.Context
+}
+
+func NewTemplate(ctx app.Context, fileName string) *Template {
+	return &Template{File: fileName, ctx: ctx}
+}
+
+func (t *Template) WithData(data map[string]any) *Template {
+	t.data = data
+	return t
+}
+
+func (t *Template) WithFloatMap(floatMap map[string]float64) *Template {
+	t.floatMap = floatMap
+	return t
+}
+
+func (t *Template) WithIntMap(intMap map[string]int) *Template {
+	t.intMap = intMap
+	return t
+}
+
+func (t *Template) WithBoolMap(boolMap map[string]bool) *Template {
+	t.boolMap = boolMap
+	return t
+}
+
+func (t *Template) WithFuncMap(funcMap template.FuncMap) *Template {
+	t.funcMap = funcMap
+	return t
+}
+
+func (t *Template) WithValidationErrors(validationErrors shared.ValidationErrors) *Template {
+	t.validationErrors = validationErrors
+	return t
+}
+
+func (t *Template) Render(w io.Writer) error {
+	tmpl, ok := templateCache[t.File]
+	if !ok {
+		return fmt.Errorf("template %s not found in cache", t.File)
+	}
+	if t.funcMap != nil {
+		tmpl = tmpl.Funcs(t.funcMap)
+	}
+	vErrs := shared.ValidationErrors{}
+
+	if val, ok := t.ctx.PopSession("errors").(shared.ValidationErrors); ok {
+		vErrs = val
+	}
+
+	if t.validationErrors == nil {
+		t.validationErrors = vErrs
+	}
+
+	return tmpl.Execute(w, t)
 }
 
 func init() {
@@ -38,16 +95,16 @@ func init() {
 	}
 }
 
-func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateData) error {
-	t, ok := templateCache[tmpl]
-	if !ok {
-		return fmt.Errorf("template %s not found in cache", tmpl)
-	}
-	if data.FuncMap != nil {
-		t = t.Funcs(data.FuncMap)
-	}
-	return t.Execute(w, data)
-}
+//func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateOpts) error {
+//	t, ok := templateCache[tmpl]
+//	if !ok {
+//		return fmt.Errorf("template %s not found in cache", tmpl)
+//	}
+//	if data.funcMap != nil {
+//		t = t.Funcs(data.funcMap)
+//	}
+//	return t.Execute(w, data)
+//}
 
 func createTemplateCache() (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}

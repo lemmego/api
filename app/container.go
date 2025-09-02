@@ -6,21 +6,21 @@ import (
 	"sync"
 )
 
-// ServiceContainer holds all the application's dependencies
-type ServiceContainer struct {
+// serviceContainer holds all the application's dependencies
+type serviceContainer struct {
 	services map[reflect.Type]interface{}
 	mutex    sync.RWMutex
 }
 
-// newServiceContainer creates a new ServiceContainer
-func newServiceContainer() *ServiceContainer {
-	return &ServiceContainer{
+// newServiceContainer creates a new serviceContainer
+func newServiceContainer() *serviceContainer {
+	return &serviceContainer{
 		services: make(map[reflect.Type]interface{}),
 	}
 }
 
 // Add adds a service to the container
-func (sc *ServiceContainer) Add(service interface{}) {
+func (sc *serviceContainer) Add(service interface{}) {
 	sc.mutex.Lock()
 	defer sc.mutex.Unlock()
 	t := reflect.TypeOf(service)
@@ -33,7 +33,7 @@ func (sc *ServiceContainer) Add(service interface{}) {
 }
 
 // Get retrieves a service from the container and populates the provided pointer or pointer to pointer
-func (sc *ServiceContainer) Get(service interface{}) error {
+func (sc *serviceContainer) Get(service interface{}) error {
 	sc.mutex.RLock()
 	defer sc.mutex.RUnlock()
 

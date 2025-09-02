@@ -36,8 +36,12 @@ func PrettyPrint(data map[string]interface{}) (string, error) {
 }
 
 // Bcrypt hashes a string
-func Bcrypt(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+func Bcrypt(password string, rounds ...int) (string, error) {
+	bcryptRounds := 10
+	if len(rounds) > 0 {
+		bcryptRounds = rounds[0]
+	}
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptRounds)
 	return string(bytes), err
 }
 

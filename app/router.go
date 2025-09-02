@@ -13,25 +13,25 @@ import (
 
 const HTTPInKey = "input"
 
-type Handler func(c *Context) error
+type Handler func(c Context) error
 
 type Middleware func(next Handler) Handler
 
 type HTTPMiddleware func(http.Handler) http.Handler
 
-type RouteCallback func(r Router)
+type RouteCallback func(a App)
 
-type Route struct {
+type route struct {
 	Method           string
 	Path             string
 	Handlers         []Handler
 	BeforeMiddleware []Handler
 	AfterMiddleware  []Handler
-	router           *HTTPRouter
+	router           *httpRouter
 }
 
-type HTTPRouter struct {
-	routes           []*Route
+type httpRouter struct {
+	routes           []*route
 	httpMiddlewares  []HTTPMiddleware
 	basePrefix       string
 	mux              *http.ServeMux
@@ -39,15 +39,15 @@ type HTTPRouter struct {
 	afterMiddleware  []Handler
 }
 
-type Group struct {
-	router           *HTTPRouter
+type routeGroup struct {
+	router           *httpRouter
 	prefix           string
 	beforeMiddleware []Handler
 	afterMiddleware  []Handler
 }
 
-func (g *Group) Group(prefix string) *Group {
-	return &Group{
+func (g *routeGroup) Group(prefix string) *routeGroup {
+	return &routeGroup{
 		router:           g.router,
 		prefix:           path.Join(g.prefix, prefix),
 		beforeMiddleware: append([]Handler{}, g.beforeMiddleware...),
@@ -55,17 +55,17 @@ func (g *Group) Group(prefix string) *Group {
 	}
 }
 
-func (g *Group) UseBefore(handlers ...Handler) {
+func (g *routeGroup) UseBefore(handlers ...Handler) {
 	g.beforeMiddleware = append(g.beforeMiddleware, handlers...)
 }
 
-func (g *Group) UseAfter(handlers ...Handler) {
+func (g *routeGroup) UseAfter(handlers ...Handler) {
 	g.afterMiddleware = append(handlers, g.afterMiddleware...)
 }
 
-func (g *Group) addRoute(method, pattern string, handlers ...Handler) *Route {
+func (g *routeGroup) addRoute(method, pattern string, handlers ...Handler) *route {
 	fullPath := path.Join(g.prefix, pattern)
-	route := &Route{
+	route := &route{
 		Method:           method,
 		Path:             fullPath,
 		Handlers:         handlers,
@@ -77,30 +77,30 @@ func (g *Group) addRoute(method, pattern string, handlers ...Handler) *Route {
 	return route
 }
 
-func (g *Group) Get(pattern string, handlers ...Handler) *Route {
+func (g *routeGroup) Get(pattern string, handlers ...Handler) *route {
 	return g.addRoute(http.MethodGet, pattern, handlers...)
 }
 
-func (g *Group) Post(pattern string, handlers ...Handler) *Route {
+func (g *routeGroup) Post(pattern string, handlers ...Handler) *route {
 	return g.addRoute(http.MethodPost, pattern, handlers...)
 }
 
-func (g *Group) Put(pattern string, handlers ...Handler) *Route {
+func (g *routeGroup) Put(pattern string, handlers ...Handler) *route {
 	return g.addRoute(http.MethodPut, pattern, handlers...)
 }
 
-func (g *Group) Patch(pattern string, handlers ...Handler) *Route {
+func (g *routeGroup) Patch(pattern string, handlers ...Handler) *route {
 	return g.addRoute(http.MethodPatch, pattern, handlers...)
 }
 
-func (g *Group) Delete(pattern string, handlers ...Handler) *Route {
+func (g *routeGroup) Delete(pattern string, handlers ...Handler) *route {
 	return g.addRoute(http.MethodDelete, pattern, handlers...)
 }
 
-// newRouter creates a new HTTPRouter-based router
-func newRouter() *HTTPRouter {
-	return &HTTPRouter{
-		routes:           []*Route{},
+// newRouter creates a new httpRouter-based router
+func newRouter() *httpRouter {
+	return &httpRouter{
+		routes:           []*route{},
 		httpMiddlewares:  []HTTPMiddleware{},
 		mux:              http.NewServeMux(),
 		beforeMiddleware: []Handler{},
@@ -108,7 +108,7 @@ func newRouter() *HTTPRouter {
 	}
 }
 
-func (r *HTTPRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (r *httpRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var handler http.Handler = r.mux
 	for i := len(r.httpMiddlewares) - 1; i >= 0; i-- {
 		handler = r.httpMiddlewares[i](handler)
@@ -116,8 +116,8 @@ func (r *HTTPRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	handler.ServeHTTP(w, req)
 }
 
-func (r *HTTPRouter) Group(prefix string) *Group {
-	return &Group{
+func (r *httpRouter) Group(prefix string) *routeGroup {
+	return &routeGroup{
 		router:           r,
 		prefix:           prefix,
 		beforeMiddleware: []Handler{},
@@ -125,72 +125,72 @@ func (r *HTTPRouter) Group(prefix string) *Group {
 	}
 }
 
-func (r *HTTPRouter) UseBefore(handlers ...Handler) {
+func (r *httpRouter) UseBefore(handlers ...Handler) {
 	r.beforeMiddleware = append(r.beforeMiddleware, handlers...)
 }
 
-func (r *HTTPRouter) UseAfter(handlers ...Handler) {
+func (r *httpRouter) UseAfter(handlers ...Handler) {
 	r.afterMiddleware = append(handlers, r.afterMiddleware...)
 }
 
-func (r *HTTPRouter) HasRoute(method string, pattern string) bool {
-	return slices.ContainsFunc(r.routes, func(route *Route) bool {
+func (r *httpRouter) HasRoute(method string, pattern string) bool {
+	return slices.ContainsFunc(r.routes, func(route *route) bool {
 		return route.Method == method && route.Path == pattern
 	})
 }
 
-func (r *HTTPRouter) Handle(pattern string, handler http.Handler) {
+func (r *httpRouter) Handle(pattern string, handler http.Handler) {
 	r.mux.Handle(pattern, handler)
 }
 
-func (r *HTTPRouter) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+func (r *httpRouter) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	r.mux.HandleFunc(pattern, handler)
 }
 
-func (r *HTTPRouter) Get(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Get(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodGet, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Post(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Post(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodPost, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Put(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Put(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodPut, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Patch(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Patch(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodPatch, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Delete(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Delete(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodDelete, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Connect(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Connect(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodConnect, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Head(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Head(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodHead, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Options(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Options(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodOptions, pattern, handlers...)
 }
 
-func (r *HTTPRouter) Trace(pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) Trace(pattern string, handlers ...Handler) *route {
 	return r.addRoute(http.MethodTrace, pattern, handlers...)
 }
 
 // Use adds one or more standard net/http middleware to the router
-func (r *HTTPRouter) Use(middlewares ...HTTPMiddleware) {
+func (r *httpRouter) Use(middlewares ...HTTPMiddleware) {
 	r.httpMiddlewares = append(r.httpMiddlewares, middlewares...)
 }
 
-func (r *HTTPRouter) addRoute(method, pattern string, handlers ...Handler) *Route {
+func (r *httpRouter) addRoute(method, pattern string, handlers ...Handler) *route {
 	fullPath := path.Join(r.basePrefix, pattern)
-	route := &Route{
+	route := &route{
 		Method:           method,
 		Path:             fullPath,
 		Handlers:         handlers,
@@ -203,12 +203,12 @@ func (r *HTTPRouter) addRoute(method, pattern string, handlers ...Handler) *Rout
 	return route
 }
 
-func (r *Route) UseBefore(handlers ...Handler) *Route {
+func (r *route) UseBefore(handlers ...Handler) *route {
 	r.BeforeMiddleware = append(r.BeforeMiddleware, handlers...)
 	return r
 }
 
-func (r *Route) UseAfter(handlers ...Handler) *Route {
+func (r *route) UseAfter(handlers ...Handler) *route {
 	r.AfterMiddleware = append(handlers, r.AfterMiddleware...)
 	return r
 }
@@ -221,7 +221,7 @@ func Input(inputStruct any, opts ...core.Option) Middleware {
 	}
 
 	return func(next Handler) Handler {
-		return func(ctx *Context) error {
+		return func(ctx Context) error {
 			input, err := co.Decode(ctx.Request())
 			if err != nil {
 				co.GetErrorHandler()(ctx.ResponseWriter(), ctx.Request(), err)
@@ -235,20 +235,20 @@ func Input(inputStruct any, opts ...core.Option) Middleware {
 }
 
 type Router interface {
-	Group(prefix string) *Group
+	Group(prefix string) *routeGroup
 	UseBefore(handlers ...Handler)
 	UseAfter(handlers ...Handler)
 	HasRoute(method string, pattern string) bool
 	Handle(pattern string, handler http.Handler)
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
-	Get(pattern string, handlers ...Handler) *Route
-	Post(pattern string, handlers ...Handler) *Route
-	Put(pattern string, handlers ...Handler) *Route
-	Patch(pattern string, handlers ...Handler) *Route
-	Delete(pattern string, handlers ...Handler) *Route
-	Connect(pattern string, handlers ...Handler) *Route
-	Head(pattern string, handlers ...Handler) *Route
-	Options(pattern string, handlers ...Handler) *Route
-	Trace(pattern string, handlers ...Handler) *Route
+	Get(pattern string, handlers ...Handler) *route
+	Post(pattern string, handlers ...Handler) *route
+	Put(pattern string, handlers ...Handler) *route
+	Patch(pattern string, handlers ...Handler) *route
+	Delete(pattern string, handlers ...Handler) *route
+	Connect(pattern string, handlers ...Handler) *route
+	Head(pattern string, handlers ...Handler) *route
+	Options(pattern string, handlers ...Handler) *route
+	Trace(pattern string, handlers ...Handler) *route
 	Use(middlewares ...HTTPMiddleware)
 }
