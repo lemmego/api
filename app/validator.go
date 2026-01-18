@@ -1,14 +1,10 @@
 package app
 
 import (
-	"database/sql"
-
 	"encoding/json"
 	"fmt"
-	"github.com/lemmego/api/db"
 	"image"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -56,7 +52,7 @@ func (v *validator) ErrorsJSON() map[string][]string {
 }
 
 // Field creates a new Field instance for chaining validation rules
-func (v *validator) Field(name string, value interface{}) *vField {
+func (v *validator) Field(name string, value any) *vField {
 	return &vField{
 		vee:   v,
 		name:  name,
@@ -67,14 +63,14 @@ func (v *validator) Field(name string, value interface{}) *vField {
 type vField struct {
 	vee   *validator
 	name  string
-	value interface{}
+	value any
 }
 
-func (f *vField) Value() interface{} {
+func (f *vField) Value() any {
 	return f.value
 }
 
-func (f *vField) SetValue(value interface{}) *vField {
+func (f *vField) SetValue(value any) *vField {
 	f.value = value
 	return f
 }
@@ -116,7 +112,7 @@ func (f *vField) Required() *vField {
 }
 
 // Equals checks if the value is equal to the provided value
-func (f *vField) Equals(value interface{}) *vField {
+func (f *vField) Equals(value any) *vField {
 	if f.value != value {
 		f.vee.AddError(f.name, "This field must match with the provided value")
 	}
@@ -484,8 +480,8 @@ func (f *vField) ULID() *vField {
 
 // Distinct checks if all elements in a slice are unique
 func (f *vField) Distinct() *vField {
-	if slice, ok := f.value.([]interface{}); ok {
-		seen := make(map[interface{}]bool)
+	if slice, ok := f.value.([]any); ok {
+		seen := make(map[any]bool)
 		for _, value := range slice {
 			if seen[value] {
 				f.vee.AddError(f.name, "This field must contain only unique values")
@@ -529,60 +525,6 @@ func (f *vField) HexColor() *vField {
 	return f
 }
 
-// Unique checks if the value is unique in the database
-func (f *vField) Unique(table string, column string, whereClauses ...map[string]interface{}) *vField {
-	var count int64
-
-	if table == "" {
-		f.vee.AddError(f.name, "Table name not provided for uniqueness check")
-		return f
-	}
-
-	sp := db.SqlProvider()
-	if sp == nil {
-		f.vee.AddError(f.name, "Database could not be resolved")
-		return f
-	}
-	conn, ok := sp.DB().(*sql.DB)
-	if !ok {
-		f.vee.AddError(f.name, "Database could not be opened")
-		return f
-	}
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ?", table, column)
-	args := []interface{}{f.value}
-
-	// Add additional where clauses with placeholders
-	if len(whereClauses) > 0 {
-		for _, whereClause := range whereClauses {
-			for key, value := range whereClause {
-				query += fmt.Sprintf(" AND %s = ?", key)
-				args = append(args, value)
-			}
-		}
-	}
-
-	stmt, err := conn.Prepare(query)
-	if err != nil {
-		log.Println(err.Error())
-		f.vee.AddError(f.name, "Unable to prepare the query")
-		return f
-	}
-	defer stmt.Close()
-
-	err = stmt.QueryRow(args...).Scan(&count)
-	if err != nil {
-		log.Println(err.Error())
-		f.vee.AddError(f.name, "Unable to execute the query")
-		return f
-	}
-
-	if count > 0 {
-		f.vee.AddError(f.name, "This field must be unique")
-	}
-
-	return f
-}
-
 // ForEach applies validation rules to each item in an array
 func (f *vField) ForEach(rules ...func(*vField) *vField) *vField {
 	slice := reflect.ValueOf(f.value)
@@ -620,3 +562,5 @@ func (f *vField) Custom(validateFunc func(v interface{}) (bool, string)) *vField
 	}
 	return f
 }
+
+// Extension

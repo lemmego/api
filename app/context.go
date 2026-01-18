@@ -1,3 +1,6 @@
+// Package app provides HTTP request context and response utilities.
+// The context system wraps HTTP requests and responses with framework-specific
+// functionality including session management, validation, templating, and more.
 package app
 
 import (
@@ -31,20 +34,32 @@ func init() {
 	gob.Register(map[string][]string{})
 }
 
+// Context represents an HTTP request context that provides access to request/response
+// data, application services, session management, and response generation utilities.
+// It serves as the primary interface for handling HTTP requests in route handlers.
 type Context interface {
 	GetSetter
 	HttpProvider
+	// App returns the application instance
 	App() App
+	// Next proceeds to the next middleware or handler in the chain
 	Next() error
 }
 
+// GetSetter provides key-value storage for request-scoped data.
+// This allows storing and retrieving arbitrary data during request processing.
 type GetSetter interface {
+	// Get retrieves a value by key from the context storage
 	Get(key string) any
+	// Set stores a value by key in the context storage
 	Set(key string, value any)
 }
 
+// RequestGetSetter provides access to the underlying HTTP request.
 type RequestGetSetter interface {
+	// Request returns the underlying *http.Request
 	Request() *http.Request
+	// SetRequest sets the underlying *http.Request
 	SetRequest(r *http.Request)
 }
 
@@ -183,16 +198,6 @@ func (c *ctx) WriteStatus(code int) HttpResponder {
 	return c
 }
 
-//type R struct {
-//	Status       int
-//	Payload      M
-//	Renderer     res.Renderer
-//	TemplateView string
-//	TemplView    string
-//	InertiaView  string
-//	RedirectTo   string
-//}
-
 func (c *ctx) Next() error {
 	c.index++
 	if c.index < len(c.handlers) {
@@ -215,14 +220,6 @@ func (c *ctx) Cookie(name string) *http.Cookie {
 
 	return cookie
 }
-
-//func (c *ctx) Alert(typ string, message string) *res.AlertMessage {
-//	if typ != "success" && typ != "error" && typ != "warning" && typ != "info" && typ != "debug" {
-//		return &res.AlertMessage{Type: "", Body: ""}
-//	}
-//
-//	return &res.AlertMessage{Type: typ, Body: message}
-//}
 
 func (c *ctx) Validate(body req.Validator) error {
 	// return error if body is not a pointer
@@ -276,40 +273,6 @@ func (c *ctx) SetInput(inputStruct any) error {
 func (c *ctx) GetInput() any {
 	return c.Get(HTTPInKey)
 }
-
-//func (c *ctx) Respond(r *R) error {
-//	if r.RedirectTo != "" {
-//		if r.Status == 0 {
-//			r.Status = http.StatusFound
-//		}
-//		return c.Status(r.Status).Redirect(r.RedirectTo)
-//	}
-
-//if r.InertiaView != "" {
-//	if r.Status == 0 {
-//		r.Status = http.StatusOK
-//	}
-//	return c.Status(r.Status).Inertia(r.InertiaView, r.Payload)
-//}
-//
-//if r.TemplateView != "" {
-//	templateData := &res.TemplateOpts{}
-//
-//	if r.Payload != nil {
-//		templateData.Data = r.Payload
-//	}
-//	return c.Render(r.TemplateView, templateData)
-//}
-
-//	if r.Payload != nil {
-//		if r.Status == 0 {
-//			r.Status = http.StatusOK
-//		}
-//		return c.Status(r.Status).JSON(r.Payload)
-//	}
-//
-//	return nil
-//}
 
 func (c *ctx) Render(r Renderer) error {
 	return r.Render(c.ResponseWriter())
@@ -382,29 +345,6 @@ func (c *ctx) AuthUser(sessKey string) interface{} {
 	return c.PopSession(sessKey)
 }
 
-//func (c *ctx) resolveTemplateData(data *res.TemplateOpts) *res.TemplateOpts {
-//	if data == nil {
-//		data = &res.TemplateOpts{}
-//	}
-//
-//	vErrs := shared.ValidationErrors{}
-//
-//	if val, ok := c.PopSession("errors").(shared.ValidationErrors); ok {
-//		vErrs = val
-//	}
-//
-//	if data.ValidationErrors == nil {
-//		data.ValidationErrors = vErrs
-//	}
-//
-//	data.Messages = append(data.Messages, &res.AlertMessage{"success", c.PopSessionString("success")})
-//	data.Messages = append(data.Messages, &res.AlertMessage{"info", c.PopSessionString("info")})
-//	data.Messages = append(data.Messages, &res.AlertMessage{"warning", c.PopSessionString("warning")})
-//	data.Messages = append(data.Messages, &res.AlertMessage{"error", c.PopSessionString("error")})
-//
-//	return data
-//}
-
 func (c *ctx) Text(body []byte) error {
 	c.writer.Header().Set("content-type", "text/plain")
 	if c.status == 0 {
@@ -424,43 +364,6 @@ func (c *ctx) HTML(body []byte) error {
 	_, err := c.writer.Write(body)
 	return err
 }
-
-//func (c *ctx) Render(tmplPath string, data *res.TemplateOpts) error {
-//	data = c.resolveTemplateData(data)
-//	c.writer.Header().Set("content-type", "text/html")
-//	if c.status == 0 {
-//		c.status = http.StatusOK
-//	}
-//	c.writer.WriteHeader(c.status)
-//	data.funcMap = template.funcMap{
-//		"csrf": func() template.HTML {
-//			token := c.SessionString("_token")
-//			return template.HTML(`<input type="hidden" name="_token" value="` + token + `" />`)
-//		},
-//	}
-//	return res.RenderTemplate(c.writer, tmplPath, data)
-//}
-
-//func (c *ctx) Inertia(filePath string, props map[string]any) error {
-//	i, err := di.Resolve[*inertia.Inertia](c.App().Container())
-//	if i == nil || err != nil {
-//		return fmt.Errorf("inertia not enabled: %w", err)
-//	}
-//
-//	if errs := c.PopSession("errors"); errs != nil {
-//		if props == nil {
-//			props = map[string]any{}
-//		}
-//
-//		props["errors"] = errs
-//	}
-//
-//	if c.status == 0 {
-//		c.status = http.StatusOK
-//	}
-//	c.writer.WriteHeader(c.status)
-//	return i.Render(c.ResponseWriter(), c.Request(), filePath, props)
-//}
 
 func (c *ctx) Redirect(url string) error {
 	c.writer.Header().Set("Location", url)

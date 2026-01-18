@@ -1,16 +1,27 @@
+// Package fs provides file system abstraction for the Lemmego framework.
+//
+// It offers a unified interface for file operations across different storage
+// backends including local filesystem, AWS S3, Google Cloud Storage, and others.
+// The package manages multiple disk configurations and provides automatic
+// resolution of storage drivers based on configuration.
 package fs
 
 import (
 	"errors"
 	"fmt"
+
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/fsys"
 )
 
+// FileSystem manages multiple file system disks and provides access to different
+// storage backends through a unified interface. It handles disk resolution,
+// caching, and configuration-based storage driver selection.
 type FileSystem struct {
-	disks map[string]fsys.FS
+	disks map[string]fsys.FS // Cache of initialized file system instances
 }
 
+// NewFileSystem creates a new FileSystem manager with an empty disk cache.
 func NewFileSystem() *FileSystem {
 	return &FileSystem{disks: map[string]fsys.FS{}}
 }

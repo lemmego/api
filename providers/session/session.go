@@ -18,18 +18,16 @@ type Provider struct {
 }
 
 func (s *Provider) Provide(a app.App) error {
-	fmt.Println("Registering Session")
 	var sess *session.Session
-	sessionConfig := a.Config().Get("session")
 	sessionDriver := a.Config().Get("session.driver")
 	cookie := scs.SessionCookie{
-		Name:     sessionConfig.(config.M)["cookie"].(string),
-		Domain:   sessionConfig.(config.M)["domain"].(string),
-		HttpOnly: sessionConfig.(config.M)["http_only"].(bool),
-		Path:     sessionConfig.(config.M)["path"].(string),
+		Name:     a.Config().Get("session.cookie").(string),
+		Domain:   a.Config().Get("session.domain").(string),
+		HttpOnly: a.Config().Get("session.http_only").(bool),
+		Path:     a.Config().Get("session.path").(string),
 		Persist:  false,
-		SameSite: sessionConfig.(config.M)["same_site"].(http.SameSite),
-		Secure:   sessionConfig.(config.M)["secure"].(bool),
+		SameSite: a.Config().Get("session.same_site").(http.SameSite),
+		Secure:   a.Config().Get("session.secure").(bool),
 	}
 
 	if sessionDriver == session.DriverMemory {
@@ -37,7 +35,7 @@ func (s *Provider) Provide(a app.App) error {
 	}
 
 	if sessionDriver == session.DriverFile {
-		sess = session.New(session.NewFileSession(sessionConfig.(config.M)["files"].(string)), cookie)
+		sess = session.New(session.NewFileSession(a.Config().Get("session.files").(string)), cookie)
 	}
 
 	if sessionDriver == session.DriverRedis {

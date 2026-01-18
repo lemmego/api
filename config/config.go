@@ -1,3 +1,9 @@
+// Package config provides configuration management for the Lemmego framework.
+//
+// It supports environment-based configuration with .env file loading,
+// type-safe access methods, default values, and nested configuration access
+// using dot notation. The configuration system automatically loads .env files
+// and provides convenient methods for accessing configuration values.
 package config
 
 import (
@@ -11,8 +17,9 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 )
 
-// M is a type alias for a map of string to interface{}
-type M map[string]interface{}
+// M is a type alias for a map of string to any that provides
+// type-safe accessor methods for configuration values with default value support.
+type M map[string]any
 
 func (m M) String(key string, defaultVal ...string) string {
 	if val, ok := m[key].(string); ok {
@@ -107,7 +114,7 @@ func (c *config) SetConfigMap(cm M) *config {
 }
 
 // Set sets a configuration value, supporting nested keys
-func (c *config) Set(key string, value interface{}) {
+func (c *config) Set(key string, value any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -115,7 +122,7 @@ func (c *config) Set(key string, value interface{}) {
 	c.setRecursive(keys, value, 0)
 }
 
-func (c *config) setRecursive(keys []string, value interface{}, depth int) {
+func (c *config) setRecursive(keys []string, value any, depth int) {
 	if len(keys) == 1 {
 		c.m[keys[0]] = value
 	} else {
@@ -128,7 +135,7 @@ func (c *config) setRecursive(keys []string, value interface{}, depth int) {
 }
 
 // Get retrieves a configuration value with optional fallback
-func (c *config) Get(key string, fallback ...interface{}) interface{} {
+func (c *config) Get(key string, fallback ...any) any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -139,17 +146,17 @@ func (c *config) Get(key string, fallback ...interface{}) interface{} {
 	return value
 }
 
-func (c *config) getRecursive(keys []string, current map[string]interface{}) (interface{}, bool) {
+func (c *config) getRecursive(keys []string, current map[string]any) (any, bool) {
 	if len(keys) == 1 {
 		v, ok := current[keys[0]]
 		return v, ok
 	}
-	if next, ok := current[keys[0]].(map[string]interface{}); ok {
+	if next, ok := current[keys[0]].(map[string]any); ok {
 		return c.getRecursive(keys[1:], next)
 	}
 	if next, ok := current[keys[0]].(M); ok {
-		// If it's of type M, we need to convert it to map[string]interface{}
-		return c.getRecursive(keys[1:], map[string]interface{}(next))
+		// If it's of type M, we need to convert it to map[string]any
+		return c.getRecursive(keys[1:], map[string]any(next))
 	}
 	return nil, false
 }
@@ -166,7 +173,7 @@ func deepCopy(in M) M {
 	out := make(M)
 	for k, v := range in {
 		switch v := v.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			out[k] = deepCopy(v)
 		case M:
 			out[k] = deepCopy(v)
@@ -214,12 +221,12 @@ func MustEnv[T any](key string, fallback T) T {
 }
 
 // Set sets a configuration value in the singleton instance
-func Set(key string, value interface{}) {
+func Set(key string, value any) {
 	instance.Set(key, value)
 }
 
 // Get retrieves a configuration value from the singleton instance
-func Get(key string, fallback ...interface{}) interface{} {
+func Get(key string, fallback ...any) any {
 	return instance.Get(key, fallback...)
 }
 
@@ -230,7 +237,7 @@ func GetAll() M {
 
 type Configuration interface {
 	SetConfigMap(cm M) *config
-	Set(key string, value interface{})
-	Get(key string, fallback ...interface{}) interface{}
+	Set(key string, value any)
+	Get(key string, fallback ...any) any
 	GetAll() M
 }
