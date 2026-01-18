@@ -1,17 +1,25 @@
+// Package middleware provides HTTP middleware components for the Lemmego framework.
+//
+// This file contains CSRF (Cross-Site Request Forgery) protection middleware
+// that generates and validates tokens to prevent CSRF attacks. It uses secure
+// token generation and validation with session-based token storage.
 package middleware
 
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"github.com/lemmego/api/app"
-	"github.com/lemmego/api/config"
-	"github.com/lemmego/api/req"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/lemmego/api/app"
+	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/req"
 )
 
+// getRandomToken generates a cryptographically secure random token of the specified length.
+// It uses crypto/rand for secure random number generation and base64 encoding for the token.
 func getRandomToken(length int) string {
 	b := make([]byte, length)
 	_, err := rand.Read(b)

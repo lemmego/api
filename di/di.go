@@ -1,3 +1,7 @@
+// Package di provides a dependency injection container with support for
+// different service lifetimes, generic type registration, and automatic
+// resolution of dependencies. It supports singleton, transient, and scoped
+// service lifetimes with circular dependency detection.
 package di
 
 import (
@@ -7,31 +11,38 @@ import (
 	"sync"
 )
 
-// Lifetime defines the lifetime of a service
+// Lifetime defines the lifetime of a service in the dependency injection container.
+// It controls how long service instances are kept alive and when new instances are created.
 type Lifetime int
 
 const (
-	Transient Lifetime = iota // New instance for each request
-	Singleton                 // Single instance for container lifetime
-	Scoped                    // Single instance per scope
+	// Transient creates a new instance for each request
+	Transient Lifetime = iota
+	// Singleton creates a single instance for the container lifetime
+	Singleton
+	// Scoped creates a single instance per scope
+	Scoped
 )
 
-// ServiceDescriptor describes how to create a service
+// ServiceDescriptor describes how to create a service instance.
+// It contains the service type, factory function, lifetime, and cached instance.
 type ServiceDescriptor struct {
-	ServiceType reflect.Type
-	Factory     interface{}
-	Lifetime    Lifetime
-	instance    interface{}
-	mu          sync.RWMutex
+	ServiceType reflect.Type // The type of service to create
+	Factory     any          // Factory function to create the service
+	Lifetime    Lifetime     // How long the service instance should live
+	instance    any          // Cached instance for singleton/scoped services
+	mu          sync.RWMutex // Mutex for thread-safe instance creation
 }
 
-// Container is the main DI container
+// Container is the main dependency injection container.
+// It manages service registration, resolution, and lifetime management
+// with support for scoped containers and circular dependency detection.
 type Container struct {
-	services    map[reflect.Type]*ServiceDescriptor
-	mu          sync.RWMutex
-	resolving   map[reflect.Type]bool // For circular dependency detection
-	resolvingMu sync.Mutex
-	parent      *Container // For scoped containers
+	services    map[reflect.Type]*ServiceDescriptor // Registered services
+	mu          sync.RWMutex                        // Mutex for thread-safe operations
+	resolving   map[reflect.Type]bool               // For circular dependency detection
+	resolvingMu sync.Mutex                          // Mutex for resolving map
+	parent      *Container                          // Parent container for scoped containers
 }
 
 // New creates a new DI container
@@ -52,7 +63,7 @@ func (c *Container) CreateScope() *Container {
 }
 
 // Register registers a service with explicit type
-func Register[T any](c *Container, lifetime Lifetime, factory interface{}) error {
+func Register[T any](c *Container, lifetime Lifetime, factory any) error {
 	var zero T
 	serviceType := reflect.TypeOf(zero)
 
@@ -93,17 +104,17 @@ func Register[T any](c *Container, lifetime Lifetime, factory interface{}) error
 }
 
 // RegisterSingleton is a convenience method for singleton registration
-func RegisterSingleton[T any](c *Container, factory interface{}) error {
+func RegisterSingleton[T any](c *Container, factory any) error {
 	return Register[T](c, Singleton, factory)
 }
 
 // RegisterTransient is a convenience method for transient registration
-func RegisterTransient[T any](c *Container, factory interface{}) error {
+func RegisterTransient[T any](c *Container, factory any) error {
 	return Register[T](c, Transient, factory)
 }
 
 // RegisterScoped is a convenience method for scoped registration
-func RegisterScoped[T any](c *Container, factory interface{}) error {
+func RegisterScoped[T any](c *Container, factory any) error {
 	return Register[T](c, Scoped, factory)
 }
 
@@ -139,7 +150,7 @@ func Resolve[T any](c *Container) (T, error) {
 }
 
 // resolve is the internal resolution logic
-func (c *Container) resolve(serviceType reflect.Type) (interface{}, error) {
+func (c *Container) resolve(serviceType reflect.Type) (any, error) {
 	// Check for circular dependencies
 	c.resolvingMu.Lock()
 	if c.resolving[serviceType] {
@@ -304,7 +315,7 @@ func (r *ServiceRegistrar[T]) AsScoped() *ServiceRegistrar[T] {
 }
 
 // Use registers the factory
-func (r *ServiceRegistrar[T]) Use(factory interface{}) error {
+func (r *ServiceRegistrar[T]) Use(factory any) error {
 	return Register[T](r.container, r.lifetime, factory)
 }
 
@@ -321,7 +332,7 @@ type Logger interface {
 }
 
 type Database interface {
-	Query(sql string) ([]map[string]interface{}, error)
+	Query(sql string) ([]map[string]any, error)
 }
 
 type UserService interface {
@@ -343,9 +354,9 @@ func NewMockDatabase(logger Logger) *MockDatabase {
 	return &MockDatabase{logger: logger}
 }
 
-func (db *MockDatabase) Query(sql string) ([]map[string]interface{}, error) {
+func (db *MockDatabase) Query(sql string) ([]map[string]any, error) {
 	db.logger.Log(fmt.Sprintf("Executing query: %s", sql))
-	return []map[string]interface{}{}, nil
+	return []map[string]any{}, nil
 }
 
 type DefaultUserService struct {

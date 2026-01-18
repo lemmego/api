@@ -1,3 +1,8 @@
+// Package app provides the core application framework for Lemmego.
+//
+// This package contains the main application container, dependency injection system,
+// HTTP routing, middleware pipeline, and service registration mechanisms.
+// It serves as the central orchestrator for all framework components.
 package app
 
 import (
@@ -5,10 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	"github.com/lemmego/api/fs"
 	"github.com/lemmego/api/session"
 
-	"github.com/lemmego/gpa"
 	"log"
 	"log/slog"
 	"net/http"
@@ -19,6 +24,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lemmego/gpa"
+
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/api/req"
 	"github.com/lemmego/api/shared"
@@ -26,9 +33,12 @@ import (
 	"github.com/lemmego/migration/cmd"
 )
 
+// M is a convenience type for map[string]any, commonly used for JSON responses
+// and error payloads. It implements the error interface for use in error handling.
 type M map[string]any
 
 // Error returns a string representation of the JSON-encoded map.
+// This allows M to be used as an error type that can be serialized to JSON.
 func (m M) Error() string {
 	jsonEncoded, err := json.Marshal(m)
 	if err != nil {
@@ -37,55 +47,101 @@ func (m M) Error() string {
 	return string(jsonEncoded)
 }
 
+// Bootstrapper defines the interface for configuring and starting the application.
+// It provides a fluent API for registering various application components before
+// the application starts handling requests.
 type Bootstrapper interface {
+	// WithConfig sets the configuration map for the application
 	WithConfig(c config.M) Bootstrapper
+
+	// WithCommands registers CLI commands with the application
 	WithCommands(commands []Command) Bootstrapper
+
+	// WithMiddlewares registers global middleware that runs before route handlers
 	WithMiddlewares(middlewares []Handler) Bootstrapper
+
+	// WithHTTPMiddlewares registers HTTP-level middleware in the request pipeline
 	WithHTTPMiddlewares(middlewares []HTTPMiddleware) Bootstrapper
+
+	// WithRoutes registers route callback functions for defining application routes
 	WithRoutes(routeCallbacks []RouteCallback) Bootstrapper
+
+	// WithProviders registers service providers that configure application services
 	WithProviders(providers []Provider) Bootstrapper
+
+	// Run starts the application, either as a web server or CLI command processor
 	Run()
 }
 
+// AppCore defines the core functionality available to the application.
+// It provides access to configuration, routing, sessions, file systems,
+// and service management capabilities.
 type AppCore interface {
+	// Config returns the application configuration instance
 	Config() config.Configuration
+
+	// Router returns the HTTP router for registering routes
 	Router() Router
+
+	// Session returns the session manager instance
 	Session() *session.Session
+
+	// FileSystem returns the file system abstraction instance
 	FileSystem() *fs.FileSystem
+
+	// RunningInConsole returns true if the application is running as a CLI command
 	RunningInConsole() bool
+
+	// Bootstrapped returns true if the application has completed bootstrap phase
 	Bootstrapped() bool
+
+	// InProduction returns true if the application is running in production environment
 	InProduction() bool
+
+	// Env checks if the application is running in the specified environment
 	Env(environment string) bool
+
+	// AddService registers a service instance in the service container
 	AddService(service any)
+
+	// Service retrieves a service instance from the service container by type
 	Service(service any) any
+
+	// EventEmitter provides event publishing and subscription capabilities
 	EventEmitter
 }
 
+// App represents the main application interface that combines core functionality.
+// It serves as the primary interface for application instances.
 type App interface {
 	AppCore
 }
 
+// AppEngine combines bootstrapping and core functionality.
+// It represents the complete application engine that can be configured and run.
 type AppEngine interface {
 	Bootstrapper
 	AppCore
 }
 
-// application is the main application
+// application is the main application implementation that manages the entire
+// framework lifecycle including configuration, routing, middleware, services,
+// and request handling.
 type application struct {
-	mu               sync.Mutex
-	config           config.Configuration
-	router           *httpRouter
-	routeCallbacks   []RouteCallback
-	commands         []Command
-	middleware       []Handler
-	httpMiddleware   []HTTPMiddleware
-	runningInConsole bool
-	bootstrapped     bool
+	mu               sync.Mutex           // Mutex for thread-safe operations
+	config           config.Configuration // Application configuration
+	router           *httpRouter          // HTTP router for handling requests
+	routeCallbacks   []RouteCallback      // Route registration callbacks
+	commands         []Command            // CLI commands
+	middleware       []Handler            // Application-level middleware
+	httpMiddleware   []HTTPMiddleware     // HTTP-level middleware
+	runningInConsole bool                 // True if running as CLI command
+	bootstrapped     bool                 // True if bootstrap phase completed
 
-	publishables    []*publishable
-	providers       []Provider
-	serviceRegistry *serviceRegistry
-	eventRegistry   *eventRegistry
+	publishables    []*publishable   // Assets and files that can be published
+	providers       []Provider       // Service providers for dependency injection
+	serviceRegistry *serviceRegistry // Container for registered services
+	eventRegistry   *eventRegistry   // Event system for application events
 }
 
 func (a *application) On(event string, listener EventListener) {
@@ -101,13 +157,18 @@ func (a *application) WithProviders(providers []Provider) Bootstrapper {
 	return a
 }
 
+// Options contains configuration options for creating a new application instance.
+// It allows specifying configuration, commands, routes, and providers during
+// application initialization.
 type Options struct {
-	Config    config.M
-	Commands  []Command
-	Routes    []RouteCallback
-	Providers []Provider
+	Config    config.M        // Configuration map
+	Commands  []Command       // CLI commands to register
+	Routes    []RouteCallback // Route registration callbacks
+	Providers []Provider      // Service providers to register
 }
 
+// OptFunc is a function that modifies Options during application configuration.
+// It enables a functional options pattern for flexible application setup.
 type OptFunc func(opts *Options)
 
 func (a *application) Router() Router {
@@ -138,30 +199,36 @@ func (a *application) Service(service any) any {
 	return val
 }
 
+// WithConfig returns an OptFunc that sets the configuration map for the application.
 func WithConfig(config config.M) OptFunc {
 	return func(opts *Options) {
 		opts.Config = config
 	}
 }
 
+// WithCommands returns an OptFunc that registers CLI commands with the application.
 func WithCommands(commands []Command) OptFunc {
 	return func(opts *Options) {
 		opts.Commands = commands
 	}
 }
 
+// WithRoutes returns an OptFunc that registers route callbacks with the application.
 func WithRoutes(routes []RouteCallback) OptFunc {
 	return func(opts *Options) {
 		opts.Routes = routes
 	}
 }
 
+// WithProviders returns an OptFunc that registers service providers with the application.
 func WithProviders(providers []Provider) OptFunc {
 	return func(opts *Options) {
 		opts.Providers = providers
 	}
 }
 
+// Configure creates and configures a new application instance using functional options.
+// It initializes the application with the provided configuration, commands, routes, and providers.
 func Configure(optFuncs ...OptFunc) AppEngine {
 	opts := &Options{}
 
@@ -193,10 +260,14 @@ func Configure(optFuncs ...OptFunc) AppEngine {
 	return i
 }
 
+// InProduction returns true if the application is running in production environment.
+// It checks the APP_ENV environment variable.
 func InProduction() bool {
 	return os.Getenv("APP_ENV") == "production"
 }
 
+// Env checks if the application is running in the specified environment.
+// It compares the APP_ENV environment variable with the provided environment name.
 func Env(environment string) bool {
 	return os.Getenv("APP_ENV") == environment
 }

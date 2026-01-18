@@ -1,3 +1,9 @@
+// Package req provides HTTP request parsing, validation, and input binding utilities.
+//
+// It supports automatic parsing of request data from various sources (JSON, form data,
+// query parameters, headers) into Go structs with validation support. The package
+// integrates with httpin for flexible input binding and provides validation interfaces
+// for request data validation.
 package req
 
 import (
@@ -19,20 +25,28 @@ import (
 
 const InKey = "input"
 
+// Validator defines an interface for structs that can validate themselves.
+// Types implementing this interface can provide custom validation logic.
 type Validator interface {
 	Validate() error
 }
 
+// RequestResponder provides access to HTTP request and response writer.
+// This interface is typically implemented by framework context types.
 type RequestResponder interface {
 	Request() *http.Request
 	ResponseWriter() http.ResponseWriter
 }
 
+// GetSetter provides key-value storage for request-scoped data.
+// This allows storing and retrieving arbitrary values during request processing.
 type GetSetter interface {
-	Get(key string) interface{}
-	Set(key string, value interface{})
+	Get(key string) any
+	Set(key string, value any)
 }
 
+// Context combines request/response access with key-value storage.
+// This interface is typically implemented by HTTP context types.
 type Context interface {
 	RequestResponder
 	GetSetter
@@ -57,7 +71,7 @@ func WantsHTML(r *http.Request) bool {
 	return strings.Contains(accept, "text/html")
 }
 
-func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	if r.Header.Get("Content-Type") != "" {
 		value, _ := header.ParseValueAndParams(r.Header, "Content-Type")
 		if value != "application/json" {

@@ -1,3 +1,5 @@
+// Package app provides HTTP routing functionality including route registration,
+// middleware management, and request handling for the Lemmego framework.
 package app
 
 import (
