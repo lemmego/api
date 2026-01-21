@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 
 	"github.com/lemmego/api/shared"
@@ -90,12 +89,15 @@ type BodyParser interface {
 	FormFile(key string) (multipart.File, *multipart.FileHeader, error)
 	HasFile(key string) bool
 	HasMultiPartRequest() bool
+	HasFormDataRequest() bool
 	HasFormURLEncodedRequest() bool
+	HasJSONRequest() bool
 }
 
 type AcceptHeaderResolver interface {
 	WantsJSON() bool
 	WantsHTML() bool
+	WantsXML() bool
 }
 
 type CookieGetSetter interface {
@@ -329,6 +331,10 @@ func (c *ctx) WantsHTML() bool {
 	return req.WantsHTML(c.request)
 }
 
+func (c *ctx) WantsXML() bool {
+	return req.WantsXML(c.request)
+}
+
 func (c *ctx) JSON(body M) error {
 	// TODO: Check if header is already sent
 	response, _ := json.Marshal(body)
@@ -391,13 +397,19 @@ func (c *ctx) Referer() string {
 }
 
 func (c *ctx) HasMultiPartRequest() bool {
-	contentType := strings.ToLower(c.Header("Content-Type"))
-	return contentType != "" && strings.HasPrefix(contentType, "multipart/")
+	return req.HasMultiPart(c.request)
+}
+
+func (c *ctx) HasFormDataRequest() bool {
+	return req.HasFormData(c.request)
 }
 
 func (c *ctx) HasFormURLEncodedRequest() bool {
-	contentType := strings.ToLower(c.Header("Content-Type"))
-	return contentType == "application/x-www-form-urlencoded"
+	return req.HasFormUrlEncoded(c.request)
+}
+
+func (c *ctx) HasJSONRequest() bool {
+	return req.HasJSON(c.request)
 }
 
 func (c *ctx) IsInertiaRequest() bool {

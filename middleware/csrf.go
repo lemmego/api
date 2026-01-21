@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,17 @@ import (
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/api/req"
 )
+
+// CSRFOpts holds configuration options for CSRF middleware.
+type CSRFOpts struct {
+	// ExcludePatterns contains regex patterns for routes that should skip CSRF verification.
+	// For example: []string{"/api/.*", "/webhooks/.*"}
+	ExcludePatterns []string
+}
+
+// compiledRegexCache caches compiled regex patterns for performance.
+var compiledRegexCache = make(map[string]*regexp.Regexp)
+var regexCacheMutex = make(map[string]*struct{})
 
 // getRandomToken generates a cryptographically secure random token of the specified length.
 // It uses crypto/rand for secure random number generation and base64 encoding for the token.
@@ -73,38 +85,72 @@ func getTokenFromRequest(c app.HttpProvider) string {
 	return token
 }
 
-func VerifyCSRF(c app.Context) error {
-	if c.IsReading() || matchedToken(c) {
-		if c.WantsHTML() && !strings.HasPrefix(c.Request().URL.Path, "/static") {
-			token := ""
-			if val, ok := c.Session("_token").(string); ok && val != "" {
-				token = val
-			} else {
-				token = getRandomToken(40)
+// shouldExcludePath checks if the given path matches any of the exclusion patterns.
+func shouldExcludePath(path string, patterns []string) bool {
+	for _, pattern := range patterns {
+		// Check cache first
+		regex, ok := compiledRegexCache[pattern]
+		if !ok {
+			// Compile and cache the regex
+			var err error
+			regex, err = regexp.Compile(pattern)
+			if err != nil {
+				slog.Warn("Invalid CSRF exclusion pattern", "pattern", pattern, "error", err)
+				continue
 			}
-			c.PutSession("_token", token)
-			c.Set("_token", token)
-
-			// TODO: Find a way to share the token with inertia
-			//i, err := di.Resolve[*inertia.Inertia](c.App().Container())
-			//
-			//if err == nil && i != nil {
-			//	i.ShareProp("csrfToken", token)
-			//}
-
-			c.SetCookie(&http.Cookie{
-				Name:     "XSRF-TOKEN",
-				Value:    token,
-				Expires:  time.Now().Add(config.Get("session.lifetime").(time.Duration)),
-				Path:     "/",
-				Domain:   "",
-				Secure:   c.App().InProduction(),
-				HttpOnly: false,
-				SameSite: http.SameSiteLaxMode, // Prevents the browser from sending this cookie along with cross-site requests
-			})
+			compiledRegexCache[pattern] = regex
 		}
-		return c.Next()
-	}
 
-	return c.PageExpired()
+		if regex.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// VerifyCSRF creates and returns a CSRF protection middleware handler with optional configuration.
+// If opts is nil, default options are used (no exclusions).
+func VerifyCSRF(opts *CSRFOpts) app.Handler {
+	return func(c app.Context) error {
+		// Check if this route should be excluded from CSRF verification
+		if opts != nil && len(opts.ExcludePatterns) > 0 {
+			if shouldExcludePath(c.Request().URL.Path, opts.ExcludePatterns) {
+				return c.Next()
+			}
+		}
+
+		if c.IsReading() || matchedToken(c) {
+			if c.WantsHTML() && !strings.HasPrefix(c.Request().URL.Path, "/static") {
+				token := ""
+				if val, ok := c.Session("_token").(string); ok && val != "" {
+					token = val
+				} else {
+					token = getRandomToken(40)
+				}
+				c.PutSession("_token", token)
+				c.Set("_token", token)
+
+				// TODO: Find a way to share the token with inertia
+				//i, err := di.Resolve[*inertia.Inertia](c.App().Container())
+				//
+				//if err == nil && i != nil {
+				//	i.ShareProp("csrfToken", token)
+				//}
+
+				c.SetCookie(&http.Cookie{
+					Name:     "XSRF-TOKEN",
+					Value:    token,
+					Expires:  time.Now().Add(config.Get("session.lifetime").(time.Duration)),
+					Path:     "/",
+					Domain:   "",
+					Secure:   c.App().InProduction(),
+					HttpOnly: false,
+					SameSite: http.SameSiteLaxMode, // Prevents the browser from sending this cookie along with cross-site requests
+				})
+			}
+			return c.Next()
+		}
+
+		return c.PageExpired()
+	}
 }

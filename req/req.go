@@ -16,8 +16,6 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/romsar/gonertia"
-
 	"github.com/ggicci/httpin"
 	"github.com/ggicci/httpin/core"
 	"github.com/golang/gddo/httputil/header"
@@ -69,6 +67,11 @@ func WantsJSON(r *http.Request) bool {
 func WantsHTML(r *http.Request) bool {
 	accept := r.Header.Get("Accept")
 	return strings.Contains(accept, "text/html")
+}
+
+func WantsXML(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "application/xml") || strings.Contains(accept, "text/xml")
 }
 
 func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
@@ -142,12 +145,28 @@ func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
+func HasMultiPart(r *http.Request) bool {
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	return contentType != "" && strings.HasPrefix(contentType, "multipart/")
+}
+
 func HasFormData(r *http.Request) bool {
-	return strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data")
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	return contentType != "" && strings.HasPrefix(contentType, "multipart/form-data")
+}
+
+func HasFormUrlEncoded(r *http.Request) bool {
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	return contentType != "" && strings.HasPrefix(contentType, "application/x-www-form-urlencoded")
+}
+
+func HasJSON(r *http.Request) bool {
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	return contentType != "" && strings.HasPrefix(contentType, "application/json")
 }
 
 func ParseInput(rr RequestResponder, inputStruct any, opts ...core.Option) error {
-	if !HasFormData(rr.Request()) && (WantsJSON(rr.Request()) || gonertia.IsInertiaRequest(rr.Request())) {
+	if HasJSON(rr.Request()) {
 		if err := DecodeJSONBody(rr.ResponseWriter(), rr.Request(), inputStruct); err != nil {
 			return err
 		}
@@ -170,7 +189,7 @@ func ParseInput(rr RequestResponder, inputStruct any, opts ...core.Option) error
 }
 
 func In(c Context, inputStruct any, opts ...core.Option) error {
-	if WantsJSON(c.Request()) || gonertia.IsInertiaRequest(c.Request()) {
+	if HasJSON(c.Request()) {
 		if err := DecodeJSONBody(c.ResponseWriter(), c.Request(), inputStruct); err != nil {
 			return err
 		}
