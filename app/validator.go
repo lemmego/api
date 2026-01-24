@@ -20,39 +20,39 @@ import (
 	"github.com/lemmego/api/shared"
 )
 
-type validator struct {
+type Validator struct {
 	App
 	Errors shared.ValidationErrors
 }
 
-func newValidator(app App) *validator {
-	return &validator{
+func newValidator(app App) *Validator {
+	return &Validator{
 		App:    app,
 		Errors: make(map[string][]string),
 	}
 }
 
-func (v *validator) AddError(field, message string) {
+func (v *Validator) AddError(field, message string) {
 	v.Errors[field] = append(v.Errors[field], message)
 }
 
-func (v *validator) IsValid() bool {
+func (v *Validator) IsValid() bool {
 	return len(v.Errors) == 0
 }
 
-func (v *validator) Validate() error {
+func (v *Validator) Validate() error {
 	if v.IsValid() {
 		return nil
 	}
 	return v.Errors
 }
 
-func (v *validator) ErrorsJSON() map[string][]string {
+func (v *Validator) ErrorsJSON() map[string][]string {
 	return v.Errors
 }
 
 // Field creates a new Field instance for chaining validation rules
-func (v *validator) Field(name string, value any) *vField {
+func (v *Validator) Field(name string, value any) *vField {
 	return &vField{
 		vee:   v,
 		name:  name,
@@ -61,7 +61,7 @@ func (v *validator) Field(name string, value any) *vField {
 }
 
 type vField struct {
-	vee   *validator
+	vee   *Validator
 	name  string
 	value any
 }

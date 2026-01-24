@@ -75,6 +75,7 @@ type RequestResponseResolver interface {
 
 type RequestBodyValidator interface {
 	Validate(body req.Validator) error
+	Validator() *Validator
 }
 
 type InputDecoder interface {
@@ -223,6 +224,10 @@ func (c *ctx) Cookie(name string) *http.Cookie {
 	return cookie
 }
 
+func (c *ctx) Validator() *Validator {
+	return newValidator(c.app)
+}
+
 func (c *ctx) Validate(body req.Validator) error {
 	// return error if body is not a pointer
 	if reflect.ValueOf(body).Kind() != reflect.Ptr {
@@ -246,13 +251,6 @@ func (c *ctx) ParseInput(inputStruct any) error {
 		return err
 	}
 
-	v := reflect.ValueOf(inputStruct).Elem()
-
-	nameField := v.FieldByName("BaseInput")
-	if nameField.IsValid() && nameField.CanSet() {
-		i := &BaseInput{validator: newValidator(c.app), app: c.app, ctx: c}
-		nameField.Set(reflect.ValueOf(i))
-	}
 	return nil
 }
 
