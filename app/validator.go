@@ -21,13 +21,11 @@ import (
 )
 
 type Validator struct {
-	App
 	Errors shared.ValidationErrors
 }
 
-func newValidator(app App) *Validator {
+func NewValidator() *Validator {
 	return &Validator{
-		App:    app,
 		Errors: make(map[string][]string),
 	}
 }

@@ -225,7 +225,7 @@ func (c *ctx) Cookie(name string) *http.Cookie {
 }
 
 func (c *ctx) Validator() *Validator {
-	return newValidator(c.app)
+	return NewValidator()
 }
 
 func (c *ctx) Validate(body req.Validator) error {
