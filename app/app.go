@@ -138,10 +138,16 @@ type application struct {
 	runningInConsole bool                 // True if running as CLI command
 	bootstrapped     bool                 // True if bootstrap phase completed
 
-	publishables    []*publishable   // Assets and files that can be published
+	publishables    []*Publishable   // Assets and files that can be published
 	providers       []Provider       // Service providers for dependency injection
 	serviceRegistry *serviceRegistry // Container for registered services
 	eventRegistry   *eventRegistry   // Event system for application events
+
+	// Graceful shutdown tracking
+	activeRequests sync.WaitGroup // Tracks active HTTP requests
+	shutdownInit   sync.Once      // Ensures shutdown happens only once
+	shutdownSignal chan struct{}  // Signal to indicate shutdown has started
+	isShuttingDown bool           // Flag to indicate shutdown is in progress
 }
 
 func (a *application) On(event string, listener EventListener) {
@@ -401,7 +407,21 @@ func (a *application) registerRoutes() {
 
 func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 	fn := func(w http.ResponseWriter, r *http.Request) {
-		slog.Debug("Handling request for route: %s %s", route.Method, route.Path)
+		// Check if application is shutting down
+		app.mu.Lock()
+		shuttingDown := app.isShuttingDown
+		app.mu.Unlock()
+
+		if shuttingDown {
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Track active request
+		app.activeRequests.Add(1)
+		defer app.activeRequests.Done()
+
+		slog.Debug("Handling request for route: %s %s", "method", route.Method, "path", route.Path)
 		if route.router == nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
@@ -418,7 +438,7 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 		token := sess.Token(r.Context())
 		if token != "" {
 			r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
-			slog.Debug("Current session ID: ", token)
+			slog.Debug("Current session ID: ", "sessionID", token)
 		}
 
 		allHandlers := append(append([]Handler{}, route.BeforeMiddleware...), route.Handlers...)
@@ -630,8 +650,48 @@ func (a *application) shutDown() {
 	if !a.RunningInConsole() {
 		slog.Info("Shutting down application...")
 	}
+
+	// Mark application as shutting down to reject new requests
+	a.mu.Lock()
+	a.isShuttingDown = true
+	a.mu.Unlock()
+
+	// Shutdown event emitter first to prevent new events
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := a.eventRegistry.Shutdown(shutdownCtx); err != nil {
+		slog.Error("error shutting down event emitter", "error", err)
+	}
+
+	// Shutdown providers that implement ShutdownProvider
+	for _, provider := range a.providers {
+		if shutdownProvider, ok := provider.(ShutdownProvider); ok {
+			if err := shutdownProvider.Shutdown(shutdownCtx); err != nil {
+				slog.Error("error shutting down provider", "provider", fmt.Sprintf("%T", provider), "error", err)
+			}
+		}
+	}
+
+	// Remove all GPA providers
 	err := gpa.Registry().RemoveAll()
 	if err != nil {
 		slog.Error(err.Error())
+	}
+
+	// Wait for active requests to complete (with timeout)
+	done := make(chan struct{})
+	go func() {
+		a.activeRequests.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("All active requests completed")
+	case <-time.After(10 * time.Second):
+		slog.Warn("Timeout waiting for active requests to complete")
+	case <-shutdownCtx.Done():
+		slog.Warn("Shutdown context cancelled while waiting for active requests")
 	}
 }

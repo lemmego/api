@@ -2,9 +2,9 @@ package fs
 
 import (
 	"fmt"
+
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/fs"
-	"reflect"
 )
 
 type Provider struct {
@@ -20,5 +20,6 @@ func (fss *Provider) Provide(a app.App) error {
 }
 
 func Get(a app.App) *fs.FileSystem {
-	return a.Service(reflect.TypeOf(&fs.FileSystem{})).(*fs.FileSystem)
+	return app.Get[*fs.FileSystem](a)
+	// return a.Service(reflect.TypeOf(&fs.FileSystem{})).(*fs.FileSystem)
 }

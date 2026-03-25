@@ -2,6 +2,8 @@ package session
 
 import (
 	"fmt"
+	"net/http"
+
 	"github.com/alexedwards/scs/redisstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/alexedwards/scs/v2/memstore"
@@ -9,8 +11,6 @@ import (
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/api/session"
-	"net/http"
-	"reflect"
 )
 
 type Provider struct {
@@ -57,5 +57,6 @@ func (s *Provider) Provide(a app.App) error {
 }
 
 func Get(a app.App) *session.Session {
-	return a.Service(reflect.TypeOf(&session.Session{})).(*session.Session)
+	return app.Get[*session.Session](a)
+	// return a.Service(reflect.TypeOf(&session.Session{})).(*session.Session)
 }

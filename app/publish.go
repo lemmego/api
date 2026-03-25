@@ -3,24 +3,25 @@ package app
 import (
 	"bytes"
 	"fmt"
-	"github.com/spf13/cobra"
 	"log/slog"
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 var tagsFlag string
 
 var publishCmd = &cobra.Command{Use: "publish"}
 
-type publishable struct {
+type Publishable struct {
 	FilePath string
 	Content  []byte
 	Tag      string
 }
 
-func (p *publishable) Publish() error {
+func (p *Publishable) Publish() error {
 	filePath := p.FilePath
 
 	if _, err := os.Stat(filePath); err != nil {
@@ -50,7 +51,7 @@ func init() {
 	publishCmd.PersistentFlags().StringVar(&tagsFlag, "tags", "", "Comma-separated tag names of package assets")
 }
 
-func publish(publishables []*publishable) *cobra.Command {
+func publish(publishables []*Publishable) *cobra.Command {
 	publishCmd.Run = func(cmd *cobra.Command, args []string) {
 		tags := []string{}
 		if tagsFlag != "" {

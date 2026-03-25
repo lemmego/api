@@ -61,7 +61,7 @@ func (fs *FileStore) Find(token string) ([]byte, bool, error) {
 
 func (fs *FileStore) Commit(token string, b []byte, expiry time.Time) error {
 	data := fmt.Sprintf("%s|%s", expiry.Format(time.RFC3339), base64.StdEncoding.EncodeToString(b))
-	return os.WriteFile(filepath.Join(fs.dir, token), []byte(data), 0644)
+	return os.WriteFile(filepath.Join(fs.dir, token), []byte(data), 0600)
 }
 
 func NewFileSession(directoryPath string) *FileStore {

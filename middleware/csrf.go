@@ -7,6 +7,7 @@ package middleware
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"log/slog"
 	"net/http"
@@ -36,7 +37,7 @@ func getRandomToken(length int) string {
 	b := make([]byte, length)
 	_, err := rand.Read(b)
 	if err != nil {
-		slog.Error("Critical error generating random token:", err)
+		slog.Error("Critical error generating random token", "error", err)
 		panic("Failed to generate CSRF token")
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
@@ -48,7 +49,10 @@ func matchedToken(c app.HttpProvider) bool {
 
 	matched := false
 	if sessionToken != "" && token != "" {
-		matched = sessionToken == token
+		// Use constant-time comparison to prevent timing attacks
+		if subtle.ConstantTimeCompare([]byte(sessionToken), []byte(token)) == 1 {
+			matched = true
+		}
 	}
 
 	if matched {
