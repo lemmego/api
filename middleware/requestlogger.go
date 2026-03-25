@@ -49,7 +49,7 @@ func RequestLogger(opts ...*LogOptions) app.HTTPMiddleware {
 			}
 
 			// Log request details
-			log.Printf(logStr.String())
+			log.Printf("%s", logStr.String())
 
 			// Create a responseRecorder to capture the status
 			recorder := &responseRecorder{ResponseWriter: w, status: http.StatusOK}

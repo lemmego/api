@@ -179,12 +179,62 @@ func (c *Container) resolve(serviceType reflect.Type) (any, error) {
 		return nil, fmt.Errorf("service of type %v not registered", serviceType)
 	}
 
-	// Handle pre-existing instance
-	if descriptor.instance != nil && descriptor.Lifetime == Singleton {
+	// Handle pre-existing instance (Singleton) with proper double-checked locking
+	if descriptor.Lifetime == Singleton {
+		// First check (without lock) for performance
 		descriptor.mu.RLock()
-		instance := descriptor.instance
+		if descriptor.instance != nil {
+			instance := descriptor.instance
+			descriptor.mu.RUnlock()
+			return instance, nil
+		}
 		descriptor.mu.RUnlock()
-		return instance, nil
+
+		// Second check (with write lock) to create instance
+		descriptor.mu.Lock()
+		defer descriptor.mu.Unlock()
+
+		// Check again - another goroutine may have created the instance
+		if descriptor.instance != nil {
+			return descriptor.instance, nil
+		}
+
+		// Create new instance using factory
+		if descriptor.Factory == nil {
+			return nil, fmt.Errorf("no factory for service type %v", serviceType)
+		}
+
+		factoryValue := reflect.ValueOf(descriptor.Factory)
+		factoryType := factoryValue.Type()
+
+		// Resolve dependencies
+		args := make([]reflect.Value, factoryType.NumIn())
+		for i := 0; i < factoryType.NumIn(); i++ {
+			paramType := factoryType.In(i)
+
+			// Special handling for *Container parameter
+			if paramType == reflect.TypeOf((*Container)(nil)) {
+				args[i] = reflect.ValueOf(c)
+				continue
+			}
+
+			dep, err := c.resolve(paramType)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve dependency %v: %w", paramType, err)
+			}
+			args[i] = reflect.ValueOf(dep)
+		}
+
+		// Call factory
+		results := factoryValue.Call(args)
+
+		// Handle error return
+		if len(results) > 1 && !results[1].IsNil() {
+			return nil, results[1].Interface().(error)
+		}
+
+		descriptor.instance = results[0].Interface()
+		return descriptor.instance, nil
 	}
 
 	// For scoped services in parent container, create new instance in scope
@@ -239,8 +289,8 @@ func (c *Container) resolve(serviceType reflect.Type) (any, error) {
 
 	instance := results[0].Interface()
 
-	// Cache instance if singleton or scoped
-	if descriptor.Lifetime == Singleton || descriptor.Lifetime == Scoped {
+	// Cache instance if scoped (singleton is already handled above)
+	if descriptor.Lifetime == Scoped {
 		descriptor.mu.Lock()
 		descriptor.instance = instance
 		descriptor.mu.Unlock()

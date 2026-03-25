@@ -93,10 +93,6 @@ var (
 	once     sync.Once
 )
 
-func init() {
-	_ = GetInstance()
-}
-
 // GetInstance returns the singleton instance of config
 func GetInstance() Configuration {
 	once.Do(func() {
