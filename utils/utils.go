@@ -7,6 +7,7 @@ import (
 	"time"
 
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/lemmego/api/config"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -57,6 +58,38 @@ func StructToMap(obj interface{}) (map[string]interface{}, error) {
 		return nil, err
 	}
 	return ret, nil
+}
+
+func ConfigPath() string {
+	return config.Get("app.config_path").(string)
+}
+
+func CommandPath() string {
+	return config.Get("app.command_path").(string)
+}
+
+func HandlerPath() string {
+	return config.Get("app.handler_path").(string)
+}
+
+func InputPath() string {
+	return config.Get("app.input_path").(string)
+}
+
+func MiddlewarePath() string {
+	return config.Get("app.middleware_path").(string)
+}
+
+func MigrationPath() string {
+	return config.Get("app.migration_path").(string)
+}
+
+func ModelPath() string {
+	return config.Get("app.model_path").(string)
+}
+
+func RoutePath() string {
+	return config.Get("app.route_path").(string)
 }
 
 func GenerateKey() ([]byte, error) {
