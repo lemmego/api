@@ -24,8 +24,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lemmego/gpa"
-
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/api/req"
 	"github.com/lemmego/api/shared"
@@ -671,12 +669,6 @@ func (a *application) shutDown() {
 				slog.Error("error shutting down provider", "provider", fmt.Sprintf("%T", provider), "error", err)
 			}
 		}
-	}
-
-	// Remove all GPA providers
-	err := gpa.Registry().RemoveAll()
-	if err != nil {
-		slog.Error(err.Error())
 	}
 
 	// Wait for active requests to complete (with timeout)
