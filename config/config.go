@@ -218,17 +218,17 @@ func MustEnv[T any](key string, fallback T) T {
 
 // Set sets a configuration value in the singleton instance
 func Set(key string, value any) {
-	instance.Set(key, value)
+	GetInstance().Set(key, value)
 }
 
 // Get retrieves a configuration value from the singleton instance
 func Get(key string, fallback ...any) any {
-	return instance.Get(key, fallback...)
+	return GetInstance().Get(key, fallback...)
 }
 
 // GetAll returns all configurations from the singleton instance
 func GetAll() M {
-	return instance.GetAll()
+	return GetInstance().GetAll()
 }
 
 type Configuration interface {
