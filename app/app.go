@@ -491,26 +491,6 @@ func (a *application) Run() {
 		panic("app configuration is missing")
 	}
 
-	// Check if the sql configuration is nil
-	if a.config.Get("sql") == nil {
-		panic("sql configuration is missing")
-	}
-
-	// Check if the keyvalue configuration is nil
-	if a.config.Get("keyvalue") == nil {
-		panic("keyvalue configuration is missing")
-	}
-
-	// Check if the session configuration is nil
-	if a.config.Get("session") == nil {
-		panic("session configuration is missing")
-	}
-
-	// Check if the filesystem configuration is nil
-	if a.config.Get("filesystems") == nil {
-		panic("filesystem configuration is missing")
-	}
-
 	if a.RunningInConsole() {
 		for _, provider := range a.providers {
 			if commandProvider, ok := provider.(CommandProvider); ok {
