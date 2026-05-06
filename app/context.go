@@ -29,7 +29,6 @@ import (
 
 func init() {
 	gob.Register(shared.ValidationErrors{})
-	gob.Register(shared.ValidationErrors{})
 	gob.Register(map[string][]string{})
 }
 
@@ -101,6 +100,11 @@ type AcceptHeaderResolver interface {
 	WantsXML() bool
 }
 
+type ParamQueryResolver interface {
+	Param(key string) string
+	Query(key string) string
+}
+
 type CookieGetSetter interface {
 	Cookie(name string) *http.Cookie
 	SetCookie(cookie *http.Cookie) CookieGetSetter
@@ -160,6 +164,7 @@ type Uploader interface {
 }
 
 type HttpProvider interface {
+	ParamQueryResolver
 	InputDecoder
 	BodyParser
 	RequestBodyValidator
