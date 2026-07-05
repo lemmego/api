@@ -20,7 +20,7 @@ import (
 	"sync"
 
 	"github.com/lemmego/api/shared"
-	inertia "github.com/romsar/gonertia"
+	inertia "github.com/romsar/gonertia/v3"
 
 	"github.com/lemmego/api/req"
 
