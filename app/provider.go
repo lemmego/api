@@ -17,6 +17,11 @@ type RouteProvider interface {
 	AddRoutes() RouteCallback
 }
 
+type ErrMapProvider interface {
+	// AddErrMap appends the given errMap to the existing ones
+	AddErrMap() ErrMap
+}
+
 type MiddlewareProvider interface {
 	// AddMiddlewares appends the given middleware to the existing ones
 	AddMiddlewares() []Handler

@@ -121,12 +121,14 @@ type SessionGetSetter interface {
 type ErrorProvider interface {
 	Error(status int, err error) error
 	ValidationError(err error) error
-	InternalServerError(err error) error
-	NotFound(err error) error
-	BadRequest(err error) error
-	Unauthorized(err error) error
-	Forbidden(err error) error
-	PageExpired() error
+	InternalServerError(err ...error) error
+	NotFound(err ...error) error
+	BadRequest(err ...error) error
+	Unauthorized(err ...error) error
+	Forbidden(err ...error) error
+	PageExpired(err ...error) error
+	MethodNotAllowed(err ...error) error
+	UnprocessableEntity(err ...error) error
 	NoContent() error
 }
 
@@ -350,7 +352,7 @@ func (c *ctx) JSON(body M) error {
 	return err
 }
 
-func (c *ctx) AuthUser(sessKey string) interface{} {
+func (c *ctx) AuthUser(sessKey string) any {
 	return c.PopSession(sessKey)
 }
 
@@ -637,7 +639,7 @@ func (c *ctx) SetRequest(r *http.Request) {
 	c.request = r
 }
 
-func (c *ctx) Set(key string, value interface{}) {
+func (c *ctx) Set(key string, value any) {
 	c.Lock()
 	defer c.Unlock()
 	c.request = c.request.WithContext(context.WithValue(c.request.Context(), key, value))
@@ -742,38 +744,70 @@ func (c *ctx) ValidationError(err error) error {
 	return c.WithInput().Back()
 }
 
-func (c *ctx) InternalServerError(err error) error {
-	return c.Error(http.StatusInternalServerError, err)
+func (c *ctx) InternalServerError(err ...error) error {
+	if len(err) > 0 {
+		return &InternalServerError{HttpMessage{http.StatusInternalServerError, fmt.Sprintf("server error: %s", err[0].Error())}}
+	}
+	return ErrInternalServerError
 }
 
-func (c *ctx) NotFound(err error) error {
-	return c.Error(http.StatusNotFound, err)
+func (c *ctx) NotFound(err ...error) error {
+	if len(err) > 0 {
+		return &NotFoundError{HttpMessage{http.StatusNotFound, fmt.Sprintf("not found: %s", err[0].Error())}}
+	}
+	return ErrNotFound
 }
 
-func (c *ctx) BadRequest(err error) error {
-	return c.Error(http.StatusBadRequest, err)
+func (c *ctx) BadRequest(err ...error) error {
+	if len(err) > 0 {
+		return &BadRequestError{HttpMessage{http.StatusBadRequest, fmt.Sprintf("bad request: %s", err[0].Error())}}
+	}
+	return ErrBadRequest
 }
 
-func (c *ctx) Unauthorized(err error) error {
-	return c.Error(http.StatusUnauthorized, err)
+func (c *ctx) Unauthorized(err ...error) error {
+	if len(err) > 0 {
+		return &UnauthorizedError{HttpMessage{http.StatusUnauthorized, fmt.Sprintf("unauthorized: %s", err[0].Error())}}
+	}
+	return ErrUnauthorized
 }
 
-func (c *ctx) Forbidden(err error) error {
-	return c.Error(http.StatusForbidden, err)
+func (c *ctx) Forbidden(err ...error) error {
+	if len(err) > 0 {
+		return &ForbiddenError{HttpMessage{http.StatusForbidden, fmt.Sprintf("forbidden: %s", err[0].Error())}}
+	}
+	return ErrForbidden
 }
 
-func (c *ctx) PageExpired() error {
-	return c.Error(419, errors.New("page expired"))
+func (c *ctx) PageExpired(err ...error) error {
+	if len(err) > 0 {
+		return &PageExpiredError{HttpMessage{419, fmt.Sprintf("page expired: %s", err[0].Error())}}
+	}
+	return ErrPageExpired
 }
 
 func (c *ctx) NoContent() error {
-	_, err := c.SetStatus(204).Write(nil)
+	_, err := c.SetStatus(http.StatusNoContent).Write(nil)
 	if err != nil {
 		return c.Error(http.StatusInternalServerError, err)
 	}
 	return nil
 }
 
-func (c *ctx) DecodeJSON(v interface{}) error {
+func (c *ctx) MethodNotAllowed(err ...error) error {
+	if len(err) > 0 {
+		return &MethodNotAllowedError{HttpMessage{http.StatusMethodNotAllowed, fmt.Sprintf("method not allowed: %s", err[0].Error())}}
+	}
+	return ErrMethodNotAllowed
+}
+
+func (c *ctx) UnprocessableEntity(err ...error) error {
+	if len(err) > 0 {
+		return &UnprocessableEntityError{HttpMessage{http.StatusUnprocessableEntity, fmt.Sprintf("unprocessable entity: %s", err[0].Error())}}
+	}
+	return ErrUnprocessableEntity
+}
+
+func (c *ctx) DecodeJSON(v any) error {
 	return req.DecodeJSONBody(c.writer, c.request, v)
 }

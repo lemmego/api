@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/lemmego/api/fs"
 	"github.com/lemmego/api/session"
@@ -66,6 +67,9 @@ type Bootstrapper interface {
 
 	// WithProviders registers service providers that configure application services
 	WithProviders(providers []Provider) Bootstrapper
+
+	// WithErrMap registers errMap that handles custom errors caught by the router
+	WithErrMap(errMap ErrMap) Bootstrapper
 
 	// Run starts the application, either as a web server or CLI command processor
 	Run()
@@ -133,6 +137,7 @@ type application struct {
 	commands         []Command            // CLI commands
 	middleware       []Handler            // Application-level middleware
 	httpMiddleware   []HTTPMiddleware     // HTTP-level middleware
+	errMap           ErrMap               // Application-level middleware
 	runningInConsole bool                 // True if running as CLI command
 	bootstrapped     bool                 // True if bootstrap phase completed
 
@@ -169,6 +174,7 @@ type Options struct {
 	Commands  []Command       // CLI commands to register
 	Routes    []RouteCallback // Route registration callbacks
 	Providers []Provider      // Service providers to register
+	ErrMap    ErrMap          // Service providers to register
 }
 
 // OptFunc is a function that modifies Options during application configuration.
@@ -228,6 +234,13 @@ func WithRoutes(routes []RouteCallback) OptFunc {
 func WithProviders(providers []Provider) OptFunc {
 	return func(opts *Options) {
 		opts.Providers = providers
+	}
+}
+
+// WithErrMap returns an OptFunc that registers error map with the application.
+func WithErrMap(errMap ErrMap) OptFunc {
+	return func(opts *Options) {
+		opts.ErrMap = errMap
 	}
 }
 
@@ -316,9 +329,15 @@ func (a *application) WithHTTPMiddlewares(httpMiddlewares []HTTPMiddleware) Boot
 	return a
 }
 
-// WithCommands register the commands
+// WithCommands registers the commands
 func (a *application) WithCommands(commands []Command) Bootstrapper {
 	a.commands = commands
+	return a
+}
+
+// WithErrMap registers the error map
+func (a *application) WithErrMap(errMap ErrMap) Bootstrapper {
+	a.errMap = errMap
 	return a
 }
 
@@ -452,6 +471,13 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 		}
 
 		if err := ctx.Next(); err != nil {
+			for e, h := range app.errMap {
+				if errors.As(err, &e) {
+					h(ctx)
+					return
+				}
+			}
+
 			if errors.As(err, &shared.ValidationErrors{}) {
 				ctx.ValidationError(err)
 				return
@@ -460,6 +486,12 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 			var mfr *req.MalformedRequest
 			if errors.As(err, &mfr) {
 				ctx.Error(mfr.Status, mfr)
+				return
+			}
+
+			var httpErr HttpError
+			if errors.As(err, &httpErr) {
+				ctx.Error(httpErr.GetHttpMessage().Status, errors.New(httpErr.GetHttpMessage().Message))
 				return
 			}
 
@@ -535,6 +567,12 @@ func (a *application) Run() {
 		for _, provider := range a.providers {
 			if routeProvider, ok := provider.(RouteProvider); ok {
 				a.routeCallbacks = append(a.routeCallbacks, routeProvider.AddRoutes())
+			}
+
+			if errMapProvider, ok := provider.(ErrMapProvider); ok {
+				authErrMap := errMapProvider.AddErrMap()
+				maps.Copy(authErrMap, a.errMap)
+				a.errMap = authErrMap
 			}
 		}
 	}()
