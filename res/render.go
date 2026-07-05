@@ -84,7 +84,13 @@ func (t *Template) Render(w io.Writer) error {
 		t.validationErrors = vErrs
 	}
 
-	return tmpl.Execute(w, t)
+	data := t.data
+	if data == nil {
+		data = make(map[string]any)
+	}
+	data["errors"] = t.validationErrors
+
+	return tmpl.Execute(w, data)
 }
 
 func init() {

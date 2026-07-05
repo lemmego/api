@@ -420,6 +420,21 @@ func (a *application) registerRoutes() {
 
 	a.router.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	a.router.mux.Handle("GET /public/", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
+
+	// Catch-all 404 — unmatched GET routes render the error page
+	a.router.mux.HandleFunc("GET /{path...}", func(w http.ResponseWriter, r *http.Request) {
+		ctx := &ctx{app: a, request: r, writer: w, handlers: []Handler{func(_ Context) error { return ErrNotFound }}, index: -1}
+		if err := ctx.Next(); err != nil {
+			for e, h := range a.errMap {
+				if reflect.TypeOf(err) == reflect.TypeOf(e) {
+					ctx.Set("error", err)
+					h(ctx)
+					return
+				}
+			}
+			http.NotFound(w, r)
+		}
+	})
 }
 
 func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
@@ -472,7 +487,8 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 
 		if err := ctx.Next(); err != nil {
 			for e, h := range app.errMap {
-				if errors.As(err, &e) {
+				if reflect.TypeOf(err) == reflect.TypeOf(e) {
+					ctx.Set("error", err)
 					h(ctx)
 					return
 				}
