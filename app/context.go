@@ -282,6 +282,9 @@ func (c *ctx) GetInput() any {
 }
 
 func (c *ctx) Render(r Renderer) error {
+	if c.status != 0 {
+		c.writer.WriteHeader(c.status)
+	}
 	return r.Render(c.ResponseWriter())
 }
 
