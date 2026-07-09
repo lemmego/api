@@ -1,7 +1,7 @@
 package fs
 
 import (
-	"fmt"
+	"log/slog"
 
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/fs"
@@ -12,7 +12,7 @@ type Provider struct {
 }
 
 func (fss *Provider) Provide(a app.App) error {
-	fmt.Println("Registering FS")
+	slog.Debug("Registering FS")
 	fm := fs.NewFileSystem()
 	fss.fm = fm
 	a.AddService(fm)

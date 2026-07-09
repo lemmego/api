@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/gob"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/lemmego/api/shared"
@@ -142,6 +144,7 @@ type HttpResponder interface {
 	FileResponder
 	ResponseRenderer
 	JSON(body M) error
+	XML(v any) error
 	Text(body []byte) error
 	HTML(body []byte) error
 	Redirect(url string) error
@@ -344,7 +347,6 @@ func (c *ctx) WantsXML() bool {
 }
 
 func (c *ctx) JSON(body M) error {
-	// TODO: Check if header is already sent
 	response, _ := json.Marshal(body)
 	c.writer.Header().Set("content-Type", "application/json")
 	if c.status == 0 {
@@ -353,6 +355,53 @@ func (c *ctx) JSON(body M) error {
 	c.writer.WriteHeader(c.status)
 	_, err := c.writer.Write(response)
 	return err
+}
+
+func (c *ctx) XML(v any) error {
+	var response []byte
+	switch val := v.(type) {
+	case []byte:
+		response = val
+	case string:
+		response = []byte(val)
+	case M, map[string]any:
+		response = marshalMapToXML(val)
+	default:
+		var err error
+		response, err = xml.Marshal(v)
+		if err != nil {
+			return err
+		}
+	}
+	c.writer.Header().Set("content-Type", "application/xml")
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	c.writer.WriteHeader(c.status)
+	_, err := c.writer.Write(response)
+	return err
+}
+
+func marshalMapToXML(v any) []byte {
+	var buf strings.Builder
+	buf.WriteString("<response>")
+	m := any(v)
+	if mm, ok := m.(M); ok {
+		for k, val := range mm {
+			fmt.Fprintf(&buf, "<%s>%v</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(val)), xmlEscape(k))
+		}
+	}
+	buf.WriteString("</response>")
+	return []byte(buf.String())
+}
+
+func xmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
 }
 
 func (c *ctx) AuthUser(sessKey string) any {

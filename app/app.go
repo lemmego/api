@@ -360,30 +360,24 @@ func (a *application) registerProviders() {
 		if err := provider.Provide(a); err != nil {
 			panic(err)
 		}
+		if cp, ok := provider.(CommandProvider); ok {
+			a.commands = append(a.commands, cp.AddCommands()...)
+		}
+		if pp, ok := provider.(PublishableProvider); ok {
+			a.publishables = append(a.publishables, pp.AddPublishables()...)
+		}
+		if mp, ok := provider.(MiddlewareProvider); ok {
+			a.middleware = append(a.middleware, mp.AddMiddlewares()...)
+		}
+		if rp, ok := provider.(RouteProvider); ok {
+			a.routeCallbacks = append(a.routeCallbacks, rp.AddRoutes())
+		}
+		if ep, ok := provider.(ErrMapProvider); ok {
+			authErrMap := ep.AddErrMap()
+			maps.Copy(authErrMap, a.errMap)
+			a.errMap = authErrMap
+		}
 	}
-
-	//var wg sync.WaitGroup
-	//errorsCh := make(chan error, len(a.providers))
-	//
-	//// Register service providers in parallel
-	//for _, provider := range a.providers {
-	//	wg.Add(1)
-	//	go func() {
-	//		wg.Done()
-	//		if err := provider.Provide(a); err != nil {
-	//			errorsCh <- err
-	//		}
-	//	}()
-	//}
-	//
-	//// Wait for all service registrations to complete
-	//wg.Wait()
-	//
-	//// Check for errors from service registration
-	//close(errorsCh)
-	//for err := range errorsCh {
-	//	panic(err)
-	//}
 }
 
 func (a *application) registerMiddlewares() {
@@ -421,8 +415,8 @@ func (a *application) registerRoutes() {
 	a.router.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	a.router.mux.Handle("GET /public/", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
 
-	// Catch-all 404 — unmatched GET routes render the error page
-	a.router.mux.HandleFunc("GET /{path...}", func(w http.ResponseWriter, r *http.Request) {
+	// Catch-all 404 — unmatched routes render the error page
+	a.router.mux.HandleFunc("/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		ctx := &ctx{app: a, request: r, writer: w, handlers: []Handler{func(_ Context) error { return ErrNotFound }}, index: -1}
 		if err := ctx.Next(); err != nil {
 			for e, h := range a.errMap {
@@ -539,69 +533,31 @@ func (a *application) Run() {
 		panic("app configuration is missing")
 	}
 
+	// Suppress info logs in console mode before providers run
 	if a.RunningInConsole() {
-		for _, provider := range a.providers {
-			if commandProvider, ok := provider.(CommandProvider); ok {
-				a.commands = append(a.commands, commandProvider.AddCommands()...)
-			}
-		}
-		for _, provider := range a.providers {
-			if publishProvider, ok := provider.(PublishableProvider); ok {
-				a.publishables = append(a.publishables, publishProvider.AddPublishables()...)
-			}
-		}
-		publish(a.publishables)
-		a.Dispatch(CommandsRegistering)
-		a.registerCommands()
-		a.Dispatch(CommandsRegistered)
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	}
 
-	// Register middlewares and routes sequentially to avoid race conditions
-	// Middleware must be registered before routes
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panic(fmt.Errorf("middleware registration failed: %v", r))
-			}
-		}()
-		for _, provider := range a.providers {
-			if mwProvider, ok := provider.(MiddlewareProvider); ok {
-				a.middleware = append(a.middleware, mwProvider.AddMiddlewares()...)
-			}
-		}
-		a.Dispatch(MiddlewareRegistering)
-		a.registerMiddlewares()
-		a.Dispatch(MiddlewareRegistered)
-	}()
-
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panic(fmt.Errorf("route registration failed: %v", r))
-			}
-		}()
-		for _, provider := range a.providers {
-			if routeProvider, ok := provider.(RouteProvider); ok {
-				a.routeCallbacks = append(a.routeCallbacks, routeProvider.AddRoutes())
-			}
-
-			if errMapProvider, ok := provider.(ErrMapProvider); ok {
-				authErrMap := errMapProvider.AddErrMap()
-				maps.Copy(authErrMap, a.errMap)
-				a.errMap = authErrMap
-			}
-		}
-	}()
-
-	// Register providers first so services are available for routes
+	// Register providers — this also collects commands, routes, middlewares, etc.
 	a.Dispatch(ServicesRegistering)
 	a.registerProviders()
 	a.Dispatch(ServicesRegistered)
 
+	// Publish tagged assets
+	publish(a.publishables)
+
 	if a.RunningInConsole() {
+		a.Dispatch(CommandsRegistering)
+		a.registerCommands()
+		a.Dispatch(CommandsRegistered)
 		a.shutDown()
 		os.Exit(0)
 	}
+
+	// Register middlewares then routes
+	a.Dispatch(MiddlewareRegistering)
+	a.registerMiddlewares()
+	a.Dispatch(MiddlewareRegistered)
 
 	a.Dispatch(RoutesRegistering)
 	a.registerRoutes()
@@ -681,12 +637,12 @@ func (a *application) HandleSignals(srv *http.Server) {
 func (a *application) shutDown() {
 	if !a.RunningInConsole() {
 		slog.Info("Shutting down application...")
-	}
 
-	// Mark application as shutting down to reject new requests
-	a.mu.Lock()
-	a.isShuttingDown = true
-	a.mu.Unlock()
+		// Mark application as shutting down to reject new requests
+		a.mu.Lock()
+		a.isShuttingDown = true
+		a.mu.Unlock()
+	}
 
 	// Shutdown event emitter first to prevent new events
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -705,19 +661,21 @@ func (a *application) shutDown() {
 		}
 	}
 
-	// Wait for active requests to complete (with timeout)
-	done := make(chan struct{})
-	go func() {
-		a.activeRequests.Wait()
-		close(done)
-	}()
+	// Wait for active requests to complete (with timeout) — HTTP mode only
+	if !a.RunningInConsole() {
+		done := make(chan struct{})
+		go func() {
+			a.activeRequests.Wait()
+			close(done)
+		}()
 
-	select {
-	case <-done:
-		slog.Info("All active requests completed")
-	case <-time.After(10 * time.Second):
-		slog.Warn("Timeout waiting for active requests to complete")
-	case <-shutdownCtx.Done():
-		slog.Warn("Shutdown context cancelled while waiting for active requests")
+		select {
+		case <-done:
+			slog.Info("All active requests completed")
+		case <-time.After(10 * time.Second):
+			slog.Warn("Timeout waiting for active requests to complete")
+		case <-shutdownCtx.Done():
+			slog.Warn("Shutdown context cancelled while waiting for active requests")
+		}
 	}
 }

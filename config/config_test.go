@@ -94,6 +94,54 @@ func TestGetAll(t *testing.T) {
 	}
 }
 
+func TestMString(t *testing.T) {
+	m := M{"key": "value"}
+	if m.String("key", "") != "value" {
+		t.Errorf("expected value, got %s", m.String("key", ""))
+	}
+	if m.String("missing", "fallback") != "fallback" {
+		t.Errorf("expected fallback, got %s", m.String("missing", "fallback"))
+	}
+}
+
+func TestMInt(t *testing.T) {
+	m := M{"count": 42}
+	if m.Int("count", 0) != 42 {
+		t.Errorf("expected 42, got %d", m.Int("count", 0))
+	}
+	if m.Int("missing", 99) != 99 {
+		t.Errorf("expected 99, got %d", m.Int("missing", 99))
+	}
+}
+
+func TestMBool(t *testing.T) {
+	m := M{"enabled": true}
+	if !m.Bool("enabled", false) {
+		t.Errorf("expected true")
+	}
+	if m.Bool("missing", true) != true {
+		t.Errorf("expected true fallback")
+	}
+}
+
+func TestMFloat64(t *testing.T) {
+	m := M{"pi": 3.14}
+	if m.Float64("pi", 0) != 3.14 {
+		t.Errorf("expected 3.14, got %f", m.Float64("pi", 0))
+	}
+}
+
+func TestMDuration(t *testing.T) {
+	m := M{"timeout": 5 * time.Second}
+	d := m.Duration("timeout", 0)
+	if d != 5*time.Second {
+		t.Errorf("expected 5s, got %v", d)
+	}
+	if m.Duration("missing", 10*time.Second) != 10*time.Second {
+		t.Errorf("expected 10s fallback")
+	}
+}
+
 func TestGetAllReturnsDeepCopy(t *testing.T) {
 	c := newConfig()
 	c.Set("test", "original")
