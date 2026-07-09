@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'api/**'
+      - 'fsys/**'
+      - 'migration/**'
+      - 'go.work'
+      - 'go.work.sum'
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - 'api/**'
+      - 'fsys/**'
+      - 'migration/**'
+      - 'go.work'
+      - 'go.work.sum'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.25', '1.26']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Sync workspace
+        run: go work sync
+
+      - name: Tidy check
+        run: |
+          cd api && go mod tidy
+          test -z "$(git diff --name-only)" || (echo "go.mod/go.sum not in sync — run 'go mod tidy'" && exit 1)
+
+      - name: Build
+        run: go build ./api/...
+
+      - name: Vet
+        run: go vet ./api/...
+
+      - name: Test
+        run: go test -race -count=1 ./api/...
