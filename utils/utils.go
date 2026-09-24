@@ -1,10 +1,10 @@
 package utils
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"math/rand"
-	"time"
+	"math/big"
 
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/lemmego/api/config"
@@ -14,11 +14,18 @@ import (
 // GenerateRandomString generates a random string of a given length using the characters provided.
 func GenerateRandomString(length int) string {
 	characters := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	rand.Seed(time.Now().UnixNano())
+	if length <= 0 {
+		return ""
+	}
+	max := big.NewInt(int64(len(characters)))
 
 	result := make([]byte, length)
 	for i := 0; i < length; i++ {
-		result[i] = characters[rand.Intn(len(characters))]
+		index, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return ""
+		}
+		result[i] = characters[index.Int64()]
 	}
 
 	return string(result)

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lemmego/api/app"
@@ -29,7 +30,7 @@ type CSRFOpts struct {
 
 // compiledRegexCache caches compiled regex patterns for performance.
 var compiledRegexCache = make(map[string]*regexp.Regexp)
-var regexCacheMutex = make(map[string]*struct{})
+var regexCacheMutex sync.RWMutex
 
 // getRandomToken generates a cryptographically secure random token of the specified length.
 // It uses crypto/rand for secure random number generation and base64 encoding for the token.
@@ -93,7 +94,9 @@ func getTokenFromRequest(c app.HttpProvider) string {
 func shouldExcludePath(path string, patterns []string) bool {
 	for _, pattern := range patterns {
 		// Check cache first
+		regexCacheMutex.RLock()
 		regex, ok := compiledRegexCache[pattern]
+		regexCacheMutex.RUnlock()
 		if !ok {
 			// Compile and cache the regex
 			var err error
@@ -102,7 +105,15 @@ func shouldExcludePath(path string, patterns []string) bool {
 				slog.Warn("Invalid CSRF exclusion pattern", "pattern", pattern, "error", err)
 				continue
 			}
-			compiledRegexCache[pattern] = regex
+			regexCacheMutex.Lock()
+			// Another goroutine may have compiled the same pattern while we
+			// were compiling it. Reusing that value keeps the cache consistent.
+			if cached, exists := compiledRegexCache[pattern]; exists {
+				regex = cached
+			} else {
+				compiledRegexCache[pattern] = regex
+			}
+			regexCacheMutex.Unlock()
 		}
 
 		if regex.MatchString(path) {

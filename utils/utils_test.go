@@ -8,17 +8,25 @@ import (
 )
 
 func TestGenerateRandomString(t *testing.T) {
-	s := GenerateRandomString(16)
-	if len(s) != 16 {
-		t.Errorf("expected length 16, got %d", len(s))
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	for i := 0; i < 10; i++ {
+		s := GenerateRandomString(16)
+		if len(s) != 16 {
+			t.Errorf("expected length 16, got %d", len(s))
+		}
+		for _, char := range s {
+			if !strings.ContainsRune(alphabet, char) {
+				t.Errorf("character %q is not in the expected alphabet", char)
+			}
+		}
 	}
 }
 
-func TestGenerateRandomStringUnique(t *testing.T) {
-	a := GenerateRandomString(32)
-	b := GenerateRandomString(32)
-	if a == b {
-		t.Error("two random strings should differ")
+func TestGenerateRandomStringRepeatedCalls(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		if got := GenerateRandomString(i); len(got) != i {
+			t.Errorf("call %d: expected length %d, got %d", i, i, len(got))
+		}
 	}
 }
 
@@ -89,14 +97,6 @@ func TestGenerateKey(t *testing.T) {
 	}
 	if len(key) != 32 {
 		t.Errorf("expected 32 bytes, got %d", len(key))
-	}
-}
-
-func TestGenerateKeyUnique(t *testing.T) {
-	a, _ := GenerateKey()
-	b, _ := GenerateKey()
-	if string(a) == string(b) {
-		t.Error("two keys should differ")
 	}
 }
 

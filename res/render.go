@@ -2,18 +2,21 @@ package res
 
 import (
 	"fmt"
-	"github.com/lemmego/api/app"
 	"html/template"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/shared"
 )
 
-var templateCache map[string]*template.Template
+var (
+	templateCacheMu sync.RWMutex
+	templateCache   map[string]*template.Template
+)
 
 // Renderer defines the interface for types that can render content.
 type Renderer interface {
@@ -67,38 +70,55 @@ func (t *Template) WithValidationErrors(validationErrors shared.ValidationErrors
 }
 
 func (t *Template) Render(w io.Writer) error {
+	templateCacheMu.RLock()
 	tmpl, ok := templateCache[t.File]
+	templateCacheMu.RUnlock()
 	if !ok {
 		return fmt.Errorf("template %s not found in cache", t.File)
 	}
 	if t.funcMap != nil {
+		var err error
+		tmpl, err = tmpl.Clone()
+		if err != nil {
+			return fmt.Errorf("clone template %s: %w", t.File, err)
+		}
 		tmpl = tmpl.Funcs(t.funcMap)
 	}
 	vErrs := shared.ValidationErrors{}
 
-	if val, ok := t.ctx.PopSession("errors").(shared.ValidationErrors); ok {
-		vErrs = val
+	if t.ctx != nil {
+		if val, ok := t.ctx.PopSession("errors").(shared.ValidationErrors); ok {
+			vErrs = val
+		}
 	}
 
-	if t.validationErrors == nil {
-		t.validationErrors = vErrs
+	validationErrors := t.validationErrors
+	if validationErrors == nil {
+		validationErrors = vErrs
 	}
 
-	data := t.data
-	if data == nil {
-		data = make(map[string]any)
+	data := make(map[string]any, len(t.data)+1)
+	for key, value := range t.data {
+		data[key] = value
 	}
-	data["errors"] = t.validationErrors
+	data["errors"] = validationErrors
 
 	return tmpl.Execute(w, data)
 }
 
-func init() {
-	var err error
-	templateCache, err = createTemplateCache()
+// LoadTemplates parses page templates below dir and replaces the current cache.
+// It is explicit so importing this package never depends on the process working
+// directory or terminates the process when templates are unavailable.
+func LoadTemplates(dir string) error {
+	cache, err := createTemplateCache(dir)
 	if err != nil {
-		log.Fatalf("failed to create template cache: %v", err)
+		return err
 	}
+
+	templateCacheMu.Lock()
+	templateCache = cache
+	templateCacheMu.Unlock()
+	return nil
 }
 
 //func RenderTemplate(w http.ResponseWriter, tmpl string, data *TemplateOpts) error {
@@ -112,10 +132,10 @@ func init() {
 //	return t.Execute(w, data)
 //}
 
-func createTemplateCache() (map[string]*template.Template, error) {
+func createTemplateCache(dir string) (map[string]*template.Template, error) {
 	myCache := map[string]*template.Template{}
 
-	err := filepath.Walk("./templates", func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -128,7 +148,7 @@ func createTemplateCache() (map[string]*template.Template, error) {
 			return nil
 		}
 
-		name, err := filepath.Rel("./templates", path)
+		name, err := filepath.Rel(dir, path)
 		if err != nil {
 			return fmt.Errorf("error getting relative path: %v", err)
 		}
@@ -139,13 +159,13 @@ func createTemplateCache() (map[string]*template.Template, error) {
 		}
 
 		// Find and parse layout templates
-		layouts, err := findTemplates(filepath.Dir(path), "*.layout.gohtml")
+		layouts, err := findTemplates(filepath.Dir(path), "*.layout.gohtml", dir)
 		if err != nil {
 			return fmt.Errorf("error finding layout templates for %s: %v", name, err)
 		}
 
 		// Find and parse partial templates
-		partials, err := findTemplates(filepath.Dir(path), "*.partial.gohtml")
+		partials, err := findTemplates(filepath.Dir(path), "*.partial.gohtml", dir)
 		if err != nil {
 			return fmt.Errorf("error finding partial templates for %s: %v", name, err)
 		}
@@ -171,15 +191,22 @@ func createTemplateCache() (map[string]*template.Template, error) {
 	return myCache, nil
 }
 
-func findTemplates(dir, pattern string) ([]string, error) {
+func findTemplates(dir, pattern, root string) ([]string, error) {
 	var templates []string
-	for dir != "." && dir != "/" {
+	for {
 		files, err := filepath.Glob(filepath.Join(dir, pattern))
 		if err != nil {
 			return nil, fmt.Errorf("error searching for templates in %s: %v", dir, err)
 		}
 		templates = append(templates, files...)
-		dir = filepath.Dir(dir)
+		if filepath.Clean(dir) == filepath.Clean(root) {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return templates, nil
 }

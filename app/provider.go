@@ -1,6 +1,9 @@
 package app
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 type Provider interface {
 	// Provide provides the events
@@ -44,6 +47,19 @@ type ShutdownProvider interface {
 }
 
 func Get[T any](a App) T {
+	value, ok := Lookup[T](a)
+	if !ok {
+		var zero T
+		panic(fmt.Sprintf("service %T is not registered", zero))
+	}
+	return value
+}
+
+// Lookup returns a typed service when it is registered. Unlike Get, it does
+// not panic when an optional service is absent or has an unexpected type.
+func Lookup[T any](a App) (T, bool) {
 	var zero T
-	return a.Service(zero).(T)
+	service := a.Service(zero)
+	value, ok := service.(T)
+	return value, ok
 }

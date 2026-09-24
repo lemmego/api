@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"maps"
 
 	"github.com/lemmego/api/fs"
@@ -256,7 +257,7 @@ func Configure(optFuncs ...OptFunc) AppEngine {
 	i := &application{
 		mu:               sync.Mutex{},
 		router:           newRouter(),
-		config:           config.GetInstance(),
+		config:           config.New(),
 		runningInConsole: len(os.Args) > 1,
 		serviceRegistry:  newServiceRegistry(),
 		eventRegistry:    newEventRegistry(),
@@ -273,6 +274,11 @@ func Configure(optFuncs ...OptFunc) AppEngine {
 	if opts.Routes != nil {
 		i.routeCallbacks = append(i.routeCallbacks, opts.Routes...)
 	}
+
+	if opts.Providers != nil {
+		i.providers = append(i.providers, opts.Providers...)
+	}
+	i.errMap = opts.ErrMap
 
 	return i
 }
@@ -397,18 +403,18 @@ func (a *application) registerRoutes() {
 		cb(a)
 	}
 
+	// Register the default before routes are copied into the mux.
+	if !a.router.HasRoute("GET", "/error") {
+		a.router.Get("/error", func(c Context) error {
+			err := c.PopSessionString("error")
+			return c.SetStatus(http.StatusInternalServerError).HTML([]byte("<html><body><code>" + html.EscapeString(err) + "</code></body></html>"))
+		})
+	}
+
 	for _, route := range a.router.routes {
 		slog.Debug(fmt.Sprintf("Registering route: %s %s", route.Method, route.Path))
 		a.router.mux.HandleFunc(route.Method+" "+route.Path, func(w http.ResponseWriter, req *http.Request) {
 			makeHandlerFunc(a, route)(w, req)
-		})
-	}
-
-	// Register error endpoint if not overridden already
-	if !a.router.HasRoute("GET", "/error") {
-		a.router.Get("/error", func(c Context) error {
-			err := c.PopSession("error").(string)
-			return c.SetStatus(500).HTML([]byte("<html><body><code>" + err + "</code></body></html>"))
 		})
 	}
 
@@ -478,6 +484,7 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 			handlers: allHandlers,
 			index:    -1,
 		}
+		defer ctx.cleanupMultipartForm()
 
 		if err := ctx.Next(); err != nil {
 			for e, h := range app.errMap {
@@ -507,6 +514,12 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 
 			if errors.As(err, &M{}) {
 				ctx.JSON(err.(M))
+				return
+			}
+
+			slog.Error("request failed", "error", err, "method", r.Method, "path", r.URL.Path)
+			if app.InProduction() {
+				ctx.Error(http.StatusInternalServerError, errors.New("Internal Server Error"))
 				return
 			}
 
@@ -564,8 +577,12 @@ func (a *application) Run() {
 	a.Dispatch(RoutesRegistered)
 
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", a.config.Get("app.port", 3000)),
-		Handler: a.Session().LoadAndSave(a.router),
+		Addr:              fmt.Sprintf(":%d", a.config.Get("app.port", 3000)),
+		Handler:           a.Session().LoadAndSave(a.router),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Start the server in a goroutine

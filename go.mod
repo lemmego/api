@@ -1,6 +1,6 @@
 module github.com/lemmego/api
 
-go 1.25.0
+go 1.27
 
 require (
 	dario.cat/mergo v1.0.2

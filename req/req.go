@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/ggicci/httpin"
@@ -60,18 +62,80 @@ func (mr *MalformedRequest) Error() string {
 }
 
 func WantsJSON(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	return strings.HasSuffix(accept, "json")
+	return acceptsMediaType(r, "json")
 }
 
 func WantsHTML(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	return strings.Contains(accept, "text/html")
+	return acceptsMediaType(r, "html")
 }
 
 func WantsXML(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	return strings.Contains(accept, "application/xml") || strings.Contains(accept, "text/xml")
+	return acceptsMediaType(r, "xml")
+}
+
+func acceptsMediaType(r *http.Request, kind string) bool {
+	bestSpecificity := -1
+	accepted := false
+	for _, headerValue := range r.Header.Values("Accept") {
+		for _, value := range strings.Split(headerValue, ",") {
+			mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
+			if err != nil {
+				continue
+			}
+
+			quality := 1.0
+			if rawQuality, ok := params["q"]; ok {
+				quality, err = strconv.ParseFloat(rawQuality, 64)
+				if err != nil || quality < 0 || quality > 1 {
+					continue
+				}
+			}
+
+			specificity, matches := mediaTypeSpecificity(mediaType, kind)
+			if !matches || specificity < bestSpecificity {
+				continue
+			}
+			if specificity > bestSpecificity || quality > 0 {
+				bestSpecificity = specificity
+				accepted = quality > 0
+			}
+		}
+	}
+	return accepted
+}
+
+func mediaTypeSpecificity(mediaType, kind string) (int, bool) {
+	parts := strings.SplitN(mediaType, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return 0, false
+	}
+
+	typePart, subtype := parts[0], parts[1]
+	if typePart == "*" && subtype == "*" {
+		return 0, true
+	}
+	if subtype == "*" {
+		switch kind {
+		case "json":
+			return 1, typePart == "application"
+		case "xml":
+			return 1, typePart == "application" || typePart == "text"
+		case "html":
+			return 1, typePart == "text"
+		}
+		return 0, false
+	}
+
+	switch kind {
+	case "json":
+		return 2, typePart == "application" && (subtype == "json" || strings.HasSuffix(subtype, "+json"))
+	case "html":
+		return 2, typePart == "text" && subtype == "html"
+	case "xml":
+		return 2, (typePart == "application" || typePart == "text") && (subtype == "xml" || strings.HasSuffix(subtype, "+xml"))
+	default:
+		return 0, false
+	}
 }
 
 func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {

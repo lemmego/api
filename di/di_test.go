@@ -167,3 +167,27 @@ func TestClear(t *testing.T) {
 		t.Error("after Clear, Has should return false")
 	}
 }
+
+func TestGenericContainerMethods(t *testing.T) {
+	c := New()
+	if err := c.RegisterInstance("value"); err != nil {
+		t.Fatalf("register instance: %v", err)
+	}
+
+	value, err := c.Resolve[string]()
+	if err != nil || value != "value" {
+		t.Fatalf("resolve via method = %q, %v", value, err)
+	}
+	if !c.Has[string]() {
+		t.Fatal("Has via method returned false")
+	}
+	if c.MustResolve[string]() != "value" {
+		t.Fatal("MustResolve via method returned the wrong value")
+	}
+	if err := c.For[int]().AsSingleton().UseInstance(42); err != nil {
+		t.Fatalf("register via method: %v", err)
+	}
+	if c.MustResolve[int]() != 42 {
+		t.Fatal("For via method did not register the instance")
+	}
+}

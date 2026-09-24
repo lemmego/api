@@ -142,3 +142,68 @@ func TestFileStoreOverwrite(t *testing.T) {
 		t.Errorf("expected 'updated', got %s", got)
 	}
 }
+
+func TestFileStoreRejectsPathTraversalTokens(t *testing.T) {
+	store := NewFileSession(t.TempDir())
+	for _, token := range []string{"", ".", "..", "../outside", "nested/token", `nested\token`, "/tmp/session"} {
+		t.Run(token, func(t *testing.T) {
+			if err := store.Commit(token, []byte("data"), time.Now().Add(time.Hour)); err == nil {
+				t.Fatal("expected invalid token error from Commit")
+			}
+			if _, _, err := store.Find(token); err == nil {
+				t.Fatal("expected invalid token error from Find")
+			}
+			if err := store.Delete(token); err == nil {
+				t.Fatal("expected invalid token error from Delete")
+			}
+		})
+	}
+}
+
+func TestFileStoreAtomicReplacementAndPermissions(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileSession(dir)
+	token := "atomic-token"
+
+	if err := store.Commit(token, []byte("first"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Commit(token, []byte("second"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := store.Find(token)
+	if err != nil || !found || string(got) != "second" {
+		t.Fatalf("got %q, found %v, err %v", got, found, err)
+	}
+	info, err := os.Stat(filepath.Join(dir, token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("expected session permissions 0600, got %o", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != token {
+		t.Fatalf("expected only the committed session file, got %v", entries)
+	}
+}
+
+func TestFileStoreExpiredSessionIsCleanedUp(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileSession(dir)
+	token := "expired-cleanup"
+	if err := store.Commit(token, []byte("old"), time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, found, err := store.Find(token); err != nil || found {
+		t.Fatalf("expected expired session, found %v, err %v", found, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, token)); !os.IsNotExist(err) {
+		t.Fatalf("expected expired session file to be removed, got %v", err)
+	}
+}

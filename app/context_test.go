@@ -1,12 +1,75 @@
 package app
 
 import (
+	"bytes"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
+
+func multipartRequest(t *testing.T, filename string, contents []byte) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(contents); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+func TestFormFileClosesAndCleansOwnedMultipartFileOnce(t *testing.T) {
+	request := multipartRequest(t, "large.txt", bytes.Repeat([]byte("x"), 32<<20+1))
+	ctx := &ctx{request: request}
+
+	file, _, err := ctx.FormFile("file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	osFile, ok := file.(*multipartFile)
+	if !ok {
+		t.Fatalf("expected framework multipart file, got %T", file)
+	}
+	underlying, ok := osFile.File.(*os.File)
+	if !ok {
+		t.Fatalf("expected temporary os.File, got %T", osFile.File)
+	}
+	name := underlying.Name()
+
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(name); !os.IsNotExist(err) {
+		t.Fatalf("expected multipart temp file to be removed, stat error: %v", err)
+	}
+}
+
+func TestHasFileDoesNotOpenAnAlreadyParsedFile(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request.MultipartForm = &multipart.Form{File: map[string][]*multipart.FileHeader{
+		"file": {{Filename: "file.txt"}},
+	}}
+	ctx := &ctx{request: request}
+
+	if !ctx.HasFile("file") {
+		t.Fatal("expected HasFile to find the parsed file header")
+	}
+}
 
 func TestXMLBytes(t *testing.T) {
 	w := httptest.NewRecorder()
@@ -134,6 +197,30 @@ func TestXMLSpecialChars(t *testing.T) {
 	}
 }
 
+func TestXMLPlainMap(t *testing.T) {
+	w := httptest.NewRecorder()
+	c := &ctx{writer: w}
+
+	if err := c.XML(map[string]any{"status": "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.Body.String(), "<status>ok</status>") {
+		t.Fatalf("expected plain map to be encoded, got %s", w.Body.String())
+	}
+}
+
+func TestXMLMapSanitizesElementNames(t *testing.T) {
+	w := httptest.NewRecorder()
+	c := &ctx{writer: w}
+
+	if err := c.XML(map[string]any{"bad><name": "value"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Body.String(); got != "<response><bad__name>value</bad__name></response>" {
+		t.Fatalf("expected safe XML element name, got %s", got)
+	}
+}
+
 func TestJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	c := &ctx{writer: w}
@@ -164,6 +251,37 @@ func TestJSONPreservesStatus(t *testing.T) {
 
 	if w.Code != 201 {
 		t.Errorf("expected 201, got %d", w.Code)
+	}
+}
+
+func TestJSONReturnsMarshalErrorWithoutWriting(t *testing.T) {
+	w := httptest.NewRecorder()
+	c := &ctx{writer: w}
+
+	err := c.JSON(M{"unsupported": func() {}})
+	if err == nil {
+		t.Fatal("expected JSON marshal error")
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("expected no response body, got %s", w.Body.String())
+	}
+	if w.Header().Get("Content-Type") != "" {
+		t.Fatal("expected no content type when marshaling fails")
+	}
+}
+
+func TestNoContentWritesStatusWithoutBody(t *testing.T) {
+	w := httptest.NewRecorder()
+	c := &ctx{writer: w}
+
+	if err := c.NoContent(); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("expected empty body, got %s", w.Body.String())
 	}
 }
 
@@ -270,6 +388,9 @@ func TestErrorWantsJSON(t *testing.T) {
 	ct := w.Header().Get("Content-Type")
 	if ct != "application/json" {
 		t.Errorf("expected application/json, got %s", ct)
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
 

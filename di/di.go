@@ -45,6 +45,31 @@ type Container struct {
 	parent      *Container                          // Parent container for scoped containers
 }
 
+// Resolve resolves a service through the concrete container receiver.
+func (c *Container) Resolve[T any]() (T, error) {
+	return Resolve[T](c)
+}
+
+// MustResolve resolves a service or panics through the concrete container receiver.
+func (c *Container) MustResolve[T any]() T {
+	return MustResolve[T](c)
+}
+
+// Has reports whether a service is registered in the concrete container receiver.
+func (c *Container) Has[T any]() bool {
+	return Has[T](c)
+}
+
+// For creates a fluent registrar through the concrete container receiver.
+func (c *Container) For[T any]() *ServiceRegistrar[T] {
+	return For[T](c)
+}
+
+// RegisterInstance registers an existing value through the concrete container receiver.
+func (c *Container) RegisterInstance[T any](instance T) error {
+	return RegisterInstance[T](c, instance)
+}
+
 // New creates a new DI container
 func New() *Container {
 	return &Container{

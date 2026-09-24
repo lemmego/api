@@ -13,13 +13,13 @@ import (
 
 // HealthChecker provides health check functionality for the application
 type HealthChecker struct {
-	app          *application
-	checks       map[string]HealthCheck
-	mu           sync.RWMutex
-	timeout      time.Duration
-	cachedStatus *HealthStatus
-	cacheExpiry  time.Time
-	cacheMu      sync.RWMutex
+	app           AppCore
+	checks        map[string]HealthCheck
+	mu            sync.RWMutex
+	timeout       time.Duration
+	cachedStatus  *HealthStatus
+	cacheExpiry   time.Time
+	cacheMu       sync.RWMutex
 	cacheDuration time.Duration
 }
 
@@ -46,16 +46,16 @@ type HealthStatus struct {
 
 // CheckResult represents the result of a single health check
 type CheckResult struct {
-	Status      string `json:"status"`      // pass, fail, warn
-	Message     string `json:"message"`     // Human-readable message
-	Error       string `json:"error,omitempty"` // Error message if check failed
-	DurationMs  int64  `json:"duration_ms"` // Time taken to execute check
-	Critical    bool   `json:"critical"`    // Whether this is a critical check
+	Status      string `json:"status"`                // pass, fail, warn
+	Message     string `json:"message"`               // Human-readable message
+	Error       string `json:"error,omitempty"`       // Error message if check failed
+	DurationMs  int64  `json:"duration_ms"`           // Time taken to execute check
+	Critical    bool   `json:"critical"`              // Whether this is a critical check
 	Description string `json:"description,omitempty"` // Description of what this check tests
 }
 
 // NewHealthChecker creates a new health checker for the application
-func NewHealthChecker(app *application) *HealthChecker {
+func NewHealthChecker(app AppCore) *HealthChecker {
 	return &HealthChecker{
 		app:           app,
 		checks:        make(map[string]HealthCheck),
@@ -69,9 +69,15 @@ func (h *HealthChecker) RegisterCheck(name string, check HealthCheck) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Set default timeout if not specified
-	if check.Timeout == 0 {
+	if h.checks == nil {
+		h.checks = make(map[string]HealthCheck)
+	}
+	// Set default timeout if not specified.
+	if check.Timeout <= 0 {
 		check.Timeout = h.timeout
+		if check.Timeout <= 0 {
+			check.Timeout = 10 * time.Second
+		}
 	}
 
 	h.checks[name] = check
@@ -86,6 +92,9 @@ func (h *HealthChecker) UnregisterCheck(name string) {
 
 // Check performs all registered health checks and returns the overall status
 func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Check cache first
 	h.cacheMu.RLock()
 	if h.cachedStatus != nil && time.Now().Before(h.cacheExpiry) {
@@ -99,7 +108,8 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 	defer h.mu.RUnlock()
 
 	// Create context with timeout for all checks
-	checkCtx, cancel := context.WithTimeout(ctx, h.timeout)
+	checkTimeout := h.defaultTimeout()
+	checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
 	results := make(map[string]CheckResult)
@@ -120,10 +130,19 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 			}
 
 			// Create context with individual timeout for this check
-			checkCtx, cancel := context.WithTimeout(checkCtx, check.Timeout)
+			checkTimeout := check.Timeout
+			if checkTimeout <= 0 {
+				checkTimeout = h.defaultTimeout()
+			}
+			checkCtx, cancel := context.WithTimeout(checkCtx, checkTimeout)
 			defer cancel()
 
-			err := check.CheckFunc(checkCtx)
+			var err error
+			if check.CheckFunc == nil {
+				err = fmt.Errorf("health check function is nil")
+			} else {
+				err = check.CheckFunc(checkCtx)
+			}
 			result.DurationMs = time.Since(start).Milliseconds()
 
 			if err != nil {
@@ -153,10 +172,10 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 
 	// Add version and environment if available
 	if h.app != nil {
-		if name := h.app.config.Get("app.name"); name != nil {
+		if name := h.app.Config().Get("app.name"); name != nil {
 			healthStatus.Version = fmt.Sprintf("%v", name)
 		}
-		if env := h.app.config.Get("app.env"); env != nil {
+		if env := h.app.Config().Get("app.env"); env != nil {
 			healthStatus.Env = fmt.Sprintf("%v", env)
 		}
 	}
@@ -168,6 +187,16 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 	h.cacheMu.Unlock()
 
 	return healthStatus
+}
+
+func (h *HealthChecker) defaultTimeout() time.Duration {
+	h.mu.RLock()
+	timeout := h.timeout
+	h.mu.RUnlock()
+	if timeout <= 0 {
+		return 10 * time.Second
+	}
+	return timeout
 }
 
 // determineStatus determines the overall health status based on check results
@@ -330,7 +359,7 @@ func (h *HealthChecker) RegisterDefaultChecks() {
 			return nil
 		},
 		Critical: false,
-		Timeout: 2 * time.Second,
+		Timeout:  2 * time.Second,
 	})
 
 	// Session health check
@@ -357,5 +386,5 @@ func (h *HealthChecker) RegisterDefaultChecks() {
 
 // GetHealthChecker returns the health checker for the application
 func (a *application) GetHealthChecker() *HealthChecker {
-	return &HealthChecker{app: a}
+	return NewHealthChecker(a)
 }

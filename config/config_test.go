@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/http"
 	"os"
 	"sync"
 	"testing"
@@ -9,10 +10,10 @@ import (
 
 func TestBasicSetAndGet(t *testing.T) {
 	c := newConfig()
-	
+
 	c.Set("key1", "value1")
 	result := c.Get("key1")
-	
+
 	if result != "value1" {
 		t.Errorf("Expected 'value1', got %v", result)
 	}
@@ -20,13 +21,13 @@ func TestBasicSetAndGet(t *testing.T) {
 
 func TestNestedSetAndGet(t *testing.T) {
 	c := newConfig()
-	
+
 	c.Set("database.host", "localhost")
 	c.Set("database.port", 5432)
-	
+
 	host := c.Get("database.host")
 	port := c.Get("database.port")
-	
+
 	if host != "localhost" {
 		t.Errorf("Expected 'localhost', got %v", host)
 	}
@@ -37,9 +38,9 @@ func TestNestedSetAndGet(t *testing.T) {
 
 func TestGetWithFallback(t *testing.T) {
 	c := newConfig()
-	
+
 	result := c.Get("nonexistent", "default")
-	
+
 	if result != "default" {
 		t.Errorf("Expected 'default', got %v", result)
 	}
@@ -47,7 +48,7 @@ func TestGetWithFallback(t *testing.T) {
 
 func TestSetConfigMap(t *testing.T) {
 	c := newConfig()
-	
+
 	configMap := M{
 		"app": M{
 			"name": "test-app",
@@ -55,13 +56,13 @@ func TestSetConfigMap(t *testing.T) {
 		},
 		"debug": true,
 	}
-	
+
 	c.SetConfigMap(configMap)
-	
+
 	appName := c.Get("app.name")
 	appPort := c.Get("app.port")
 	debug := c.Get("debug")
-	
+
 	if appName != "test-app" {
 		t.Errorf("Expected 'test-app', got %v", appName)
 	}
@@ -73,18 +74,56 @@ func TestSetConfigMap(t *testing.T) {
 	}
 }
 
+func TestSetConfigMapDoesNotAliasInput(t *testing.T) {
+	c := newConfig()
+	input := M{"nested": M{"value": "original"}}
+
+	c.SetConfigMap(input)
+	input["nested"].(M)["value"] = "changed"
+
+	if got := c.Get("nested.value"); got != "original" {
+		t.Fatalf("SetConfigMap aliased nested input: got %v", got)
+	}
+}
+
+func TestNestedSetReplacesNonMapIntermediate(t *testing.T) {
+	c := newConfig()
+	c.Set("database", "not a map")
+
+	c.Set("database.host", "localhost")
+
+	if got := c.Get("database.host"); got != "localhost" {
+		t.Fatalf("expected nested Set to replace non-map intermediate, got %v", got)
+	}
+}
+
+func TestLookupIsSafeAndTyped(t *testing.T) {
+	m := M{"database": M{"port": 5432}, "value": "text"}
+
+	port, ok := Lookup[int](m, "database.port")
+	if !ok || port != 5432 {
+		t.Fatalf("expected typed lookup to find port, got %d, %v", port, ok)
+	}
+	if _, ok := Lookup[int](m, "value"); ok {
+		t.Fatal("typed lookup should reject a mismatched value")
+	}
+	if _, ok := m.Lookup("value.child"); ok {
+		t.Fatal("lookup should reject traversal through a non-map")
+	}
+}
+
 func TestGetAll(t *testing.T) {
 	c := newConfig()
-	
+
 	c.Set("key1", "value1")
 	c.Set("nested.key", "nested_value")
-	
+
 	all := c.GetAll()
-	
+
 	if all["key1"] != "value1" {
 		t.Errorf("Expected 'value1', got %v", all["key1"])
 	}
-	
+
 	nested, ok := all["nested"].(M)
 	if !ok {
 		t.Errorf("Expected nested to be of type M")
@@ -145,16 +184,16 @@ func TestMDuration(t *testing.T) {
 func TestGetAllReturnsDeepCopy(t *testing.T) {
 	c := newConfig()
 	c.Set("test", "original")
-	
+
 	all1 := c.GetAll()
 	all2 := c.GetAll()
-	
+
 	all1["test"] = "modified"
-	
+
 	if all2["test"] != "original" {
 		t.Errorf("Deep copy failed: all2 was modified when all1 was changed")
 	}
-	
+
 	original := c.Get("test")
 	if original != "original" {
 		t.Errorf("Original config was modified when copy was changed")
@@ -164,20 +203,30 @@ func TestGetAllReturnsDeepCopy(t *testing.T) {
 func TestSingletonPattern(t *testing.T) {
 	instance1 := GetInstance()
 	instance2 := GetInstance()
-	
+
 	if instance1 != instance2 {
 		t.Errorf("GetInstance() should return the same instance")
+	}
+}
+
+func TestNewReturnsIsolatedConfiguration(t *testing.T) {
+	first := New()
+	second := New()
+	first.Set("app.name", "first")
+
+	if second.Get("app.name") != nil {
+		t.Fatal("New configurations should not share values")
 	}
 }
 
 func TestGlobalFunctions(t *testing.T) {
 	Set("global.test", "global_value")
 	result := Get("global.test")
-	
+
 	if result != "global_value" {
 		t.Errorf("Expected 'global_value', got %v", result)
 	}
-	
+
 	all := GetAll()
 	if all["global"].(M)["test"] != "global_value" {
 		t.Errorf("GetAll() should include globally set values")
@@ -187,10 +236,10 @@ func TestGlobalFunctions(t *testing.T) {
 func TestConcurrentReads(t *testing.T) {
 	c := newConfig()
 	c.Set("concurrent.test", "test_value")
-	
+
 	var wg sync.WaitGroup
 	errors := make(chan error, 100)
-	
+
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
@@ -203,10 +252,10 @@ func TestConcurrentReads(t *testing.T) {
 			}
 		}()
 	}
-	
+
 	wg.Wait()
 	close(errors)
-	
+
 	if len(errors) > 0 {
 		t.Errorf("Concurrent reads failed")
 	}
@@ -214,9 +263,9 @@ func TestConcurrentReads(t *testing.T) {
 
 func TestConcurrentWrites(t *testing.T) {
 	c := newConfig()
-	
+
 	var wg sync.WaitGroup
-	
+
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -227,9 +276,9 @@ func TestConcurrentWrites(t *testing.T) {
 			}
 		}(i)
 	}
-	
+
 	wg.Wait()
-	
+
 	result := c.Get("concurrent.write")
 	if result == nil {
 		t.Errorf("Concurrent writes should result in some value being set")
@@ -239,10 +288,10 @@ func TestConcurrentWrites(t *testing.T) {
 func TestConcurrentReadWrites(t *testing.T) {
 	c := newConfig()
 	c.Set("readwrite.test", "initial")
-	
+
 	var wg sync.WaitGroup
 	errors := make(chan error, 50)
-	
+
 	for i := 0; i < 25; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -253,7 +302,7 @@ func TestConcurrentReadWrites(t *testing.T) {
 			}
 		}(i)
 	}
-	
+
 	for i := 0; i < 25; i++ {
 		wg.Add(1)
 		go func() {
@@ -267,24 +316,46 @@ func TestConcurrentReadWrites(t *testing.T) {
 			}
 		}()
 	}
-	
+
 	wg.Wait()
 	close(errors)
-	
+
 	if len(errors) > 0 {
 		t.Errorf("Concurrent read/write operations failed")
+	}
+}
+
+func TestConcurrentSetConfigMapAndGetAll(t *testing.T) {
+	c := newConfig()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 25; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			c.SetConfigMap(M{"worker": M{"id": i}})
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = c.GetAll()
+		}()
+	}
+
+	wg.Wait()
+	if _, ok := c.Get("worker.id").(int); !ok {
+		t.Fatal("concurrent SetConfigMap/GetAll lost the configured value")
 	}
 }
 
 func TestMustEnvString(t *testing.T) {
 	os.Setenv("TEST_STRING", "test_value")
 	defer os.Unsetenv("TEST_STRING")
-	
+
 	result := MustEnv("TEST_STRING", "default")
 	if result != "test_value" {
 		t.Errorf("Expected 'test_value', got %v", result)
 	}
-	
+
 	defaultResult := MustEnv("NONEXISTENT_STRING", "default")
 	if defaultResult != "default" {
 		t.Errorf("Expected 'default', got %v", defaultResult)
@@ -294,12 +365,12 @@ func TestMustEnvString(t *testing.T) {
 func TestMustEnvInt(t *testing.T) {
 	os.Setenv("TEST_INT", "42")
 	defer os.Unsetenv("TEST_INT")
-	
+
 	result := MustEnv("TEST_INT", 0)
 	if result != 42 {
 		t.Errorf("Expected 42, got %v", result)
 	}
-	
+
 	defaultResult := MustEnv("NONEXISTENT_INT", 99)
 	if defaultResult != 99 {
 		t.Errorf("Expected 99, got %v", defaultResult)
@@ -309,7 +380,7 @@ func TestMustEnvInt(t *testing.T) {
 func TestMustEnvFloat(t *testing.T) {
 	os.Setenv("TEST_FLOAT", "3.14")
 	defer os.Unsetenv("TEST_FLOAT")
-	
+
 	result := MustEnv("TEST_FLOAT", 0.0)
 	if result != 3.14 {
 		t.Errorf("Expected 3.14, got %v", result)
@@ -319,56 +390,72 @@ func TestMustEnvFloat(t *testing.T) {
 func TestMustEnvBool(t *testing.T) {
 	os.Setenv("TEST_BOOL", "true")
 	defer os.Unsetenv("TEST_BOOL")
-	
+
 	result := MustEnv("TEST_BOOL", false)
 	if result != true {
 		t.Errorf("Expected true, got %v", result)
 	}
 }
 
+func TestMustEnvDuration(t *testing.T) {
+	t.Setenv("TEST_DURATION", "90m")
+
+	if got := MustEnv("TEST_DURATION", 0*time.Second); got != 90*time.Minute {
+		t.Fatalf("expected 90m, got %v", got)
+	}
+}
+
+func TestMustEnvSameSite(t *testing.T) {
+	t.Setenv("TEST_SAME_SITE", "strict")
+
+	if got := MustEnv("TEST_SAME_SITE", http.SameSiteLaxMode); got != http.SameSiteStrictMode {
+		t.Fatalf("expected SameSiteStrictMode, got %v", got)
+	}
+}
+
 func TestMustEnvPanicOnInvalidInt(t *testing.T) {
 	os.Setenv("INVALID_INT", "not_a_number")
 	defer os.Unsetenv("INVALID_INT")
-	
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic for invalid int conversion")
 		}
 	}()
-	
+
 	MustEnv("INVALID_INT", 0)
 }
 
 func TestMustEnvPanicOnInvalidFloat(t *testing.T) {
 	os.Setenv("INVALID_FLOAT", "not_a_float")
 	defer os.Unsetenv("INVALID_FLOAT")
-	
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic for invalid float conversion")
 		}
 	}()
-	
+
 	MustEnv("INVALID_FLOAT", 0.0)
 }
 
 func TestMustEnvPanicOnInvalidBool(t *testing.T) {
 	os.Setenv("INVALID_BOOL", "not_a_bool")
 	defer os.Unsetenv("INVALID_BOOL")
-	
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic for invalid bool conversion")
 		}
 	}()
-	
+
 	MustEnv("INVALID_BOOL", false)
 }
 
 func TestSingletonConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	instances := make(chan Configuration, 100)
-	
+
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
@@ -376,10 +463,10 @@ func TestSingletonConcurrency(t *testing.T) {
 			instances <- GetInstance()
 		}()
 	}
-	
+
 	wg.Wait()
 	close(instances)
-	
+
 	first := <-instances
 	for instance := range instances {
 		if instance != first {
@@ -392,7 +479,7 @@ func TestSingletonConcurrency(t *testing.T) {
 func BenchmarkGet(b *testing.B) {
 	c := newConfig()
 	c.Set("benchmark.key", "value")
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.Get("benchmark.key")
@@ -401,7 +488,7 @@ func BenchmarkGet(b *testing.B) {
 
 func BenchmarkSet(b *testing.B) {
 	c := newConfig()
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.Set("benchmark.key", i)
@@ -411,7 +498,7 @@ func BenchmarkSet(b *testing.B) {
 func BenchmarkConcurrentGet(b *testing.B) {
 	c := newConfig()
 	c.Set("benchmark.concurrent", "value")
-	
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

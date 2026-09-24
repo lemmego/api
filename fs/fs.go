@@ -9,6 +9,7 @@ package fs
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/lemmego/api/config"
 	"github.com/lemmego/fsys"
@@ -19,6 +20,7 @@ import (
 // caching, and configuration-based storage driver selection.
 type FileSystem struct {
 	disks map[string]fsys.FS // Cache of initialized file system instances
+	mu    sync.RWMutex
 }
 
 // NewFileSystem creates a new FileSystem manager with an empty disk cache.
@@ -39,11 +41,24 @@ func (fm *FileSystem) Disk(diskName ...string) (fsys.FS, error) {
 		return nil, errors.New("default disk could not be found")
 	}
 
-	if _, ok := fm.disks[name]; !ok {
-		fm.disks[name] = resolve(name)
+	fm.mu.RLock()
+	disk, ok := fm.disks[name]
+	fm.mu.RUnlock()
+	if ok {
+		return disk, nil
 	}
 
-	return fm.disks[name], nil
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	if fm.disks == nil {
+		fm.disks = make(map[string]fsys.FS)
+	}
+	if disk, ok := fm.disks[name]; ok {
+		return disk, nil
+	}
+	disk = resolve(name)
+	fm.disks[name] = disk
+	return disk, nil
 }
 
 func resolve(name string) fsys.FS {

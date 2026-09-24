@@ -49,11 +49,12 @@ func (r *eventRegistry) Dispatch(event string, payload any) {
 		return
 	}
 
-	if r.Has(event) {
-		for _, listener := range r.events[event] {
-			if err := listener(payload); err != nil {
-				slog.Error(err.Error())
-			}
+	r.mu.RLock()
+	listeners := append([]EventListener(nil), r.events[event]...)
+	r.mu.RUnlock()
+	for _, listener := range listeners {
+		if err := listener(payload); err != nil {
+			slog.Error(err.Error())
 		}
 	}
 }
@@ -77,7 +78,7 @@ func (r *eventRegistry) All() []any {
 	defer r.mu.RUnlock()
 	out := make([]any, 0, len(r.events))
 	for _, p := range r.events {
-		out = append(out, p)
+		out = append(out, append([]EventListener(nil), p...))
 	}
 	return out
 }
@@ -86,6 +87,7 @@ func (r *eventRegistry) Get(event string) ([]EventListener, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	service, ok := r.events[event]
+	service = append([]EventListener(nil), service...)
 	return service, ok
 }
 

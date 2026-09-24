@@ -13,11 +13,11 @@ import (
 
 // Tracer handles request tracing with unique trace IDs and span tracking
 type Tracer struct {
-	mu           sync.RWMutex
-	spans        map[string]*Span
-	enabled      bool
-	sampleRate   float64
-	propagation  PropagationFormat
+	mu          sync.RWMutex
+	spans       map[string]*Span
+	enabled     bool
+	sampleRate  float64
+	propagation PropagationFormat
 }
 
 // PropagationFormat defines how trace context is propagated
@@ -32,24 +32,24 @@ const (
 
 // Span represents a single span in a trace
 type Span struct {
-	TraceID      string                 `json:"trace_id"`
-	SpanID       string                 `json:"span_id"`
-	ParentSpanID string                 `json:"parent_span_id,omitempty"`
-	Name         string                 `json:"name"`
-	StartTime    time.Time              `json:"start_time"`
-	EndTime      time.Time              `json:"end_time"`
-	Duration     time.Duration          `json:"duration"`
-	Tags         map[string]string      `json:"tags,omitempty"`
-	Events       []SpanEvent            `json:"events,omitempty"`
-	Status       SpanStatus             `json:"status"`
+	TraceID      string            `json:"trace_id"`
+	SpanID       string            `json:"span_id"`
+	ParentSpanID string            `json:"parent_span_id,omitempty"`
+	Name         string            `json:"name"`
+	StartTime    time.Time         `json:"start_time"`
+	EndTime      time.Time         `json:"end_time"`
+	Duration     time.Duration     `json:"duration"`
+	Tags         map[string]string `json:"tags,omitempty"`
+	Events       []SpanEvent       `json:"events,omitempty"`
+	Status       SpanStatus        `json:"status"`
 	mu           sync.RWMutex
 }
 
 // SpanEvent represents an event within a span
 type SpanEvent struct {
-	Timestamp time.Time              `json:"timestamp"`
-	Name      string                 `json:"name"`
-	Attributes map[string]string     `json:"attributes,omitempty"`
+	Timestamp  time.Time         `json:"timestamp"`
+	Name       string            `json:"name"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // SpanStatus represents the status of a span
@@ -183,7 +183,10 @@ func (s *Span) SetError(err error) {
 	defer s.mu.Unlock()
 
 	s.Status = SpanStatusError
-	s.SetTag("error", err.Error())
+	if s.Tags == nil {
+		s.Tags = make(map[string]string)
+	}
+	s.Tags["error"] = err.Error()
 }
 
 // GetSpan retrieves a span by ID
@@ -317,7 +320,7 @@ func (t *Tracer) TraceMiddleware(next http.Handler) http.Handler {
 		// Wrap response writer to capture status code
 		rw := &tracingResponseWriter{
 			ResponseWriter: w,
-			span:          span,
+			span:           span,
 		}
 
 		// Add event for request start

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sync"
 	"testing"
 )
 
@@ -132,4 +133,20 @@ func TestOnAfterShutdownPanics(t *testing.T) {
 	er := newEventRegistry()
 	er.Shutdown(context.Background())
 	er.On("late", func(payload any) error { return nil })
+}
+
+func TestConcurrentDispatchAndRegistration(t *testing.T) {
+	er := newEventRegistry()
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				er.On("event", func(any) error { return nil })
+				er.Dispatch("event", nil)
+			}
+		}()
+	}
+	wg.Wait()
 }

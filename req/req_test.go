@@ -9,33 +9,50 @@ import (
 	"testing"
 )
 
-func TestWantsJSON(t *testing.T) {
-	r := httptest.NewRequest("GET", "/", nil)
-	r.Header.Set("Accept", "application/json")
-	if !WantsJSON(r) {
-		t.Error("expected WantsJSON true for application/json accept")
+func TestWantsMediaTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		accept     string
+		acceptMore string
+		json       bool
+		html       bool
+		xml        bool
+	}{
+		{name: "API JSON", accept: "application/json", json: true},
+		{name: "browser", accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", json: true, html: true, xml: true},
+		{name: "quality values", accept: "application/json;q=0.2, text/html;q=0.9", json: true, html: true},
+		{name: "zero quality", accept: "application/json;q=0, text/html", html: true},
+		{name: "specific zero overrides wildcard", accept: "application/json;q=0, */*;q=0.8", html: true, xml: true},
+		{name: "application wildcard", accept: "application/*", json: true, xml: true},
+		{name: "text wildcard", accept: "text/*", html: true, xml: true},
+		{name: "all wildcard", accept: "*/*", json: true, html: true, xml: true},
+		{name: "parameters", accept: "application/json; charset=utf-8; q=0.7", json: true},
+		{name: "vendor suffix", accept: "application/vnd.api+json", json: true},
+		{name: "multiple accept headers", accept: "text/plain", acceptMore: "application/xml", xml: true},
+		{name: "malformed among valid", accept: "not-a-media-type, application/json; q=0.5", json: true},
+		{name: "malformed quality", accept: "application/json;q=wat"},
+		{name: "invalid quality range", accept: "text/html;q=1.1, application/xml;q=-0.1"},
+		{name: "empty", accept: ""},
 	}
 
-	r2 := httptest.NewRequest("GET", "/", nil)
-	r2.Header.Set("Accept", "text/html")
-	if WantsJSON(r2) {
-		t.Error("expected WantsJSON false for text/html accept")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/", nil)
+			r.Header.Set("Accept", tt.accept)
+			if tt.acceptMore != "" {
+				r.Header.Add("Accept", tt.acceptMore)
+			}
 
-func TestWantsHTML(t *testing.T) {
-	r := httptest.NewRequest("GET", "/", nil)
-	r.Header.Set("Accept", "text/html")
-	if !WantsHTML(r) {
-		t.Error("expected WantsHTML true for text/html accept")
-	}
-}
-
-func TestWantsXML(t *testing.T) {
-	r := httptest.NewRequest("GET", "/", nil)
-	r.Header.Set("Accept", "application/xml")
-	if !WantsXML(r) {
-		t.Error("expected WantsXML true for application/xml accept")
+			if got := WantsJSON(r); got != tt.json {
+				t.Errorf("WantsJSON() = %v, want %v", got, tt.json)
+			}
+			if got := WantsHTML(r); got != tt.html {
+				t.Errorf("WantsHTML() = %v, want %v", got, tt.html)
+			}
+			if got := WantsXML(r); got != tt.xml {
+				t.Errorf("WantsXML() = %v, want %v", got, tt.xml)
+			}
+		})
 	}
 }
 
@@ -159,10 +176,10 @@ type mockContext struct {
 	w http.ResponseWriter
 }
 
-func (m *mockContext) Request() *http.Request      { return m.r }
+func (m *mockContext) Request() *http.Request              { return m.r }
 func (m *mockContext) ResponseWriter() http.ResponseWriter { return m.w }
-func (m *mockContext) Get(key string) any          { return nil }
-func (m *mockContext) Set(key string, value any)   {}
+func (m *mockContext) Get(key string) any                  { return nil }
+func (m *mockContext) Set(key string, value any)           {}
 
 func TestDecodeJSONBodyStrict(t *testing.T) {
 	jsonStr := `{"valid": true}`

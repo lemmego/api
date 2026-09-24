@@ -17,11 +17,18 @@ type FileStore struct {
 }
 
 func (fs *FileStore) Delete(token string) error {
-	return os.Remove(filepath.Join(fs.dir, token))
+	filename, err := fs.filename(token)
+	if err != nil {
+		return err
+	}
+	return os.Remove(filename)
 }
 
 func (fs *FileStore) Find(token string) ([]byte, bool, error) {
-	filename := filepath.Join(fs.dir, token)
+	filename, err := fs.filename(token)
+	if err != nil {
+		return nil, false, err
+	}
 	f, err := os.Open(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -60,8 +67,35 @@ func (fs *FileStore) Find(token string) ([]byte, bool, error) {
 }
 
 func (fs *FileStore) Commit(token string, b []byte, expiry time.Time) error {
+	filename, err := fs.filename(token)
+	if err != nil {
+		return err
+	}
+
 	data := fmt.Sprintf("%s|%s", expiry.Format(time.RFC3339), base64.StdEncoding.EncodeToString(b))
-	return os.WriteFile(filepath.Join(fs.dir, token), []byte(data), 0600)
+	tmp, err := os.CreateTemp(fs.dir, ".session-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.WriteString(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filename)
+}
+
+func (fs *FileStore) filename(token string) (string, error) {
+	if token == "" || token == "." || token == ".." ||
+		strings.ContainsAny(token, `/\\`) || filepath.IsAbs(token) || filepath.Clean(token) != token {
+		return "", fmt.Errorf("invalid session token")
+	}
+	return filepath.Join(fs.dir, token), nil
 }
 
 func NewFileSession(directoryPath string) *FileStore {

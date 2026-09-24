@@ -29,7 +29,7 @@ func Logger(options ...httplog.Options) app.HTTPMiddleware {
 		}
 	}
 
-	logger := httplog.NewLogger(name, options[0])
+	logger := httplog.NewLogger(name, defaultOpts)
 
 	return httplog.RequestLogger(logger)
 }

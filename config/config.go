@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -24,57 +25,67 @@ type M map[string]any
 func (m M) String(key string, defaultVal ...string) string {
 	if val, ok := m[key].(string); ok {
 		return val
-	} else {
-		return defaultVal[0]
 	}
+	return defaultVal[0]
 }
 
 func (m M) Int(key string, defaultVal ...int) int {
 	if val, ok := m[key].(int); ok {
 		return val
-	} else {
-		return defaultVal[0]
 	}
+	return defaultVal[0]
 }
 
 func (m M) Int64(key string, defaultVal ...int64) int64 {
 	if val, ok := m[key].(int64); ok {
 		return val
-	} else {
-		return defaultVal[0]
 	}
+	return defaultVal[0]
 }
 
 func (m M) Bool(key string, defaultVal ...bool) bool {
 	if val, ok := m[key].(bool); ok {
 		return val
-	} else {
-		return defaultVal[0]
 	}
+	return defaultVal[0]
 }
 
 func (m M) Float64(key string, defaultVal ...float64) float64 {
 	if val, ok := m[key].(float64); ok {
 		return val
-	} else {
-		return defaultVal[0]
 	}
+	return defaultVal[0]
 }
 
 func (m M) Duration(key string, defaultVal ...time.Duration) time.Duration {
 	if val, ok := m[key].(time.Duration); ok {
 		return val
-	} else {
-		return defaultVal[0]
 	}
+	return defaultVal[0]
 }
 
 func (m M) Time(key string, defaultVal ...time.Time) time.Time {
 	if val, ok := m[key].(time.Time); ok {
 		return val
-	} else {
-		return defaultVal[0]
 	}
+	return defaultVal[0]
+}
+
+// Lookup returns a value at key, traversing nested M and map[string]any values.
+// It never panics when a path is missing or encounters a non-map value.
+func (m M) Lookup(key string) (any, bool) {
+	return lookup(m, strings.Split(key, "."))
+}
+
+// Lookup returns a typed value at key without panicking on missing or mismatched values.
+func Lookup[T any](m M, key string) (T, bool) {
+	value, ok := m.Lookup(key)
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	result, ok := value.(T)
+	return result, ok
 }
 
 // config represents a nested configuration map with thread-safe operations
@@ -83,9 +94,14 @@ type config struct {
 	m  M
 }
 
-// newConfig initializes and returns a new config instance (private)
+// newConfig initializes and returns a new config instance.
 func newConfig() *config {
 	return &config{m: make(M)}
+}
+
+// New returns an isolated configuration instance.
+func New() Configuration {
+	return newConfig()
 }
 
 var (
@@ -105,7 +121,7 @@ func GetInstance() Configuration {
 func (c *config) SetConfigMap(cm M) *config {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.m = cm
+	c.m = deepCopy(cm)
 	return c
 }
 
@@ -122,11 +138,18 @@ func (c *config) setRecursive(keys []string, value any, depth int) {
 	if len(keys) == 1 {
 		c.m[keys[0]] = value
 	} else {
-		if _, exists := c.m[keys[0]]; !exists {
+		var subConfig M
+		switch current := c.m[keys[0]].(type) {
+		case M:
+			subConfig = current
+		case map[string]any:
+			subConfig = M(current)
+			c.m[keys[0]] = subConfig
+		default:
 			c.m[keys[0]] = make(M)
+			subConfig = c.m[keys[0]].(M)
 		}
-		subConfig := &config{m: c.m[keys[0]].(M)}
-		subConfig.setRecursive(keys[1:], value, depth+1)
+		(&config{m: subConfig}).setRecursive(keys[1:], value, depth+1)
 	}
 }
 
@@ -143,18 +166,25 @@ func (c *config) Get(key string, fallback ...any) any {
 }
 
 func (c *config) getRecursive(keys []string, current map[string]any) (any, bool) {
-	if len(keys) == 1 {
-		v, ok := current[keys[0]]
-		return v, ok
+	return lookup(current, keys)
+}
+
+func lookup(current map[string]any, keys []string) (any, bool) {
+	if len(keys) == 0 {
+		return nil, false
 	}
-	if next, ok := current[keys[0]].(map[string]any); ok {
-		return c.getRecursive(keys[1:], next)
+	value, ok := current[keys[0]]
+	if !ok || len(keys) == 1 {
+		return value, ok
 	}
-	if next, ok := current[keys[0]].(M); ok {
-		// If it's of type M, we need to convert it to map[string]any
-		return c.getRecursive(keys[1:], map[string]any(next))
+	switch next := value.(type) {
+	case M:
+		return lookup(next, keys[1:])
+	case map[string]any:
+		return lookup(next, keys[1:])
+	default:
+		return nil, false
 	}
-	return nil, false
 }
 
 // GetAll returns a deep copy of all configurations
@@ -168,16 +198,26 @@ func (c *config) GetAll() M {
 func deepCopy(in M) M {
 	out := make(M)
 	for k, v := range in {
-		switch v := v.(type) {
-		case map[string]any:
-			out[k] = deepCopy(v)
-		case M:
-			out[k] = deepCopy(v)
-		default:
-			out[k] = v
-		}
+		out[k] = deepCopyValue(v)
 	}
 	return out
+}
+
+func deepCopyValue(value any) any {
+	switch value := value.(type) {
+	case M:
+		return deepCopy(value)
+	case map[string]any:
+		return deepCopy(M(value))
+	case []any:
+		copy := make([]any, len(value))
+		for i, item := range value {
+			copy[i] = deepCopyValue(item)
+		}
+		return copy
+	default:
+		return value
+	}
 }
 
 // MustEnv retrieves an environment variable and converts it to the specified type or panics on failure
@@ -203,6 +243,14 @@ func MustEnv[T any](key string, fallback T) T {
 		var b bool
 		b, err = strconv.ParseBool(value)
 		result = any(b).(T)
+	case time.Duration:
+		var d time.Duration
+		d, err = time.ParseDuration(value)
+		result = any(d).(T)
+	case http.SameSite:
+		var sameSite http.SameSite
+		sameSite, err = parseSameSite(value)
+		result = any(sameSite).(T)
 	case string:
 		result = any(value).(T)
 	default:
@@ -214,6 +262,21 @@ func MustEnv[T any](key string, fallback T) T {
 	}
 
 	return result
+}
+
+func parseSameSite(value string) (http.SameSite, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "default", "0", "1":
+		return http.SameSiteDefaultMode, nil
+	case "lax", "2":
+		return http.SameSiteLaxMode, nil
+	case "strict", "3":
+		return http.SameSiteStrictMode, nil
+	case "none", "4":
+		return http.SameSiteNoneMode, nil
+	default:
+		return http.SameSiteDefaultMode, fmt.Errorf("invalid SameSite value %q", value)
+	}
 }
 
 // Set sets a configuration value in the singleton instance

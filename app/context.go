@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/lemmego/api/shared"
 	inertia "github.com/romsar/gonertia/v3"
@@ -197,6 +198,9 @@ type ctx struct {
 	writer  http.ResponseWriter
 	status  int
 
+	multipartFormOwned bool
+	multipartFormOnce  sync.Once
+
 	handlers []Handler
 	index    int
 }
@@ -347,13 +351,16 @@ func (c *ctx) WantsXML() bool {
 }
 
 func (c *ctx) JSON(body M) error {
-	response, _ := json.Marshal(body)
+	response, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
 	c.writer.Header().Set("content-Type", "application/json")
 	if c.status == 0 {
 		c.status = http.StatusOK
 	}
 	c.writer.WriteHeader(c.status)
-	_, err := c.writer.Write(response)
+	_, err = c.writer.Write(response)
 	return err
 }
 
@@ -385,14 +392,38 @@ func (c *ctx) XML(v any) error {
 func marshalMapToXML(v any) []byte {
 	var buf strings.Builder
 	buf.WriteString("<response>")
-	m := any(v)
-	if mm, ok := m.(M); ok {
-		for k, val := range mm {
-			fmt.Fprintf(&buf, "<%s>%v</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(val)), xmlEscape(k))
-		}
+	var mm map[string]any
+	switch value := v.(type) {
+	case M:
+		mm = map[string]any(value)
+	case map[string]any:
+		mm = value
+	}
+	for k, val := range mm {
+		name := xmlElementName(k)
+		fmt.Fprintf(&buf, "<%s>%s</%s>", name, xmlEscape(fmt.Sprint(val)), name)
 	}
 	buf.WriteString("</response>")
 	return []byte(buf.String())
+}
+
+func xmlElementName(s string) string {
+	var buf strings.Builder
+	for i, r := range s {
+		valid := unicode.IsLetter(r) || r == '_'
+		if i > 0 {
+			valid = valid || unicode.IsDigit(r) || r == '-' || r == '.'
+		}
+		if valid {
+			buf.WriteRune(r)
+		} else {
+			buf.WriteByte('_')
+		}
+	}
+	if buf.Len() == 0 {
+		return "_"
+	}
+	return buf.String()
 }
 
 func xmlEscape(s string) string {
@@ -490,18 +521,16 @@ func (c *ctx) Form() (map[string][]string, error) {
 		return c.request.Form, nil
 	}
 
-	var err error
-
 	if c.HasMultiPartRequest() {
-		err = c.request.ParseMultipartForm(32 << 20)
+		if err := c.parseMultipartForm(); err != nil {
+			return nil, err
+		}
 	}
 
 	if c.HasFormURLEncodedRequest() {
-		err = c.request.ParseForm()
-	}
-
-	if err != nil {
-		return nil, err
+		if err := c.request.ParseForm(); err != nil {
+			return nil, err
+		}
 	}
 	return c.request.Form, nil
 }
@@ -518,32 +547,70 @@ func (c *ctx) Body() (map[string][]string, error) {
 }
 
 func (c *ctx) FormFile(key string) (multipart.File, *multipart.FileHeader, error) {
-	if file, _, err := c.request.FormFile(key); file != nil && err == nil {
-		return c.request.FormFile(key)
-	}
-
-	if err := c.request.ParseMultipartForm(32 << 20); err != nil {
+	if err := c.parseMultipartForm(); err != nil {
 		return nil, nil, err
 	}
-	return c.request.FormFile(key)
+
+	file, header, err := c.request.FormFile(key)
+	if err != nil {
+		c.cleanupMultipartForm()
+		return nil, nil, err
+	}
+	if !c.multipartFormOwned {
+		return file, header, nil
+	}
+	return &multipartFile{File: file, cleanup: c.cleanupMultipartForm}, header, nil
 }
 
 func (c *ctx) HasFile(key string) bool {
-	_, _, err := c.request.FormFile(key)
-	return err == nil
+	if err := c.parseMultipartForm(); err != nil {
+		return false
+	}
+	return c.request.MultipartForm != nil && len(c.request.MultipartForm.File[key]) > 0
+}
+
+func (c *ctx) parseMultipartForm() error {
+	if c.request.MultipartForm != nil {
+		return nil
+	}
+	if err := c.request.ParseMultipartForm(32 << 20); err != nil {
+		return err
+	}
+	c.multipartFormOwned = true
+	return nil
+}
+
+func (c *ctx) cleanupMultipartForm() {
+	if !c.multipartFormOwned || c.request.MultipartForm == nil {
+		return
+	}
+	c.multipartFormOnce.Do(func() {
+		if err := c.request.MultipartForm.RemoveAll(); err != nil {
+			slog.Info("Multipart form files could not be removed", "Error:", err)
+		}
+	})
+}
+
+type multipartFile struct {
+	multipart.File
+	cleanup func()
+	once    sync.Once
+	err     error
+}
+
+func (f *multipartFile) Close() error {
+	f.once.Do(func() {
+		f.err = f.File.Close()
+		f.cleanup()
+	})
+	return f.err
 }
 
 func (c *ctx) Upload(uploadedFileName string, dir string, filename ...string) (*os.File, error) {
-	if c.HasFile(uploadedFileName) {
-		file, header, err := c.FormFile(uploadedFileName)
-
-		if err != nil {
-			return nil, fmt.Errorf("could not get form file: %w", err)
-		}
-
+	file, header, err := c.FormFile(uploadedFileName)
+	if err == nil {
 		defer func() {
-			err := file.Close()
-			if err != nil {
+			if err := file.Close(); err != nil {
 				slog.Info("Form file could not be closed", "Error:", err)
 			}
 		}()
@@ -570,6 +637,9 @@ func (c *ctx) Upload(uploadedFileName string, dir string, filename ...string) (*
 		return fss.Upload(file, header, dir)
 	}
 
+	if err != nil && !errors.Is(err, http.ErrMissingFile) {
+		return nil, fmt.Errorf("could not get form file: %w", err)
+	}
 	return nil, errors.New("file with the provided uploadedFileName does not exist")
 }
 
@@ -579,16 +649,14 @@ func (c *ctx) File(path string, headers ...map[string][]string) error {
 	}
 
 	file, err := os.Open(path)
-	defer func() {
-		err := file.Close()
-		if err != nil {
-			slog.Info("File could not be closed", "Error:", err)
-		}
-	}()
-
 	if err != nil {
 		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
 	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			slog.Info("File could not be closed", "Error:", err)
+		}
+	}()
 
 	c.writer.Header().Set("content-type", mime.TypeByExtension(filepath.Ext(file.Name())))
 	c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", filepath.Base(path)))
@@ -623,16 +691,14 @@ func (c *ctx) StorageFile(path string, headers ...map[string][]string) error {
 	}
 
 	file, err := fss.Open(path)
-	defer func() {
-		err := file.Close()
-		if err != nil {
-			slog.Info("File could not be closed", "Error:", err)
-		}
-	}()
-
 	if err != nil {
 		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
 	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			slog.Info("File could not be closed", "Error:", err)
+		}
+	}()
 
 	c.writer.Header().Set("content-type", mime.TypeByExtension(filepath.Ext(file.Name())))
 	c.writer.Header().Set("content-disposition", fmt.Sprintf("inline; filename=%s", filepath.Base(path)))
@@ -668,16 +734,14 @@ func (c *ctx) Download(path string, filename string) error {
 	}
 
 	file, err := fss.Open(path)
-	defer func() {
-		err := file.Close()
-		if err != nil {
-			slog.Info("File could not be closed", "Error:", err)
-		}
-	}()
-
 	if err != nil {
 		return c.Error(http.StatusInternalServerError, fmt.Errorf("could not open file: %w", err))
 	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			slog.Info("File could not be closed", "Error:", err)
+		}
+	}()
 
 	c.writer.Header().Set("content-type", "application/octet-stream")
 	c.writer.Header().Set("content-disposition", fmt.Sprintf("attachment; filename=%s", filename))
@@ -771,7 +835,7 @@ func (c *ctx) SessionString(key string) string {
 
 func (c *ctx) Error(status int, err error) error {
 	if c.WantsJSON() {
-		return c.JSON(M{"message": err.Error()})
+		return c.SetStatus(status).JSON(M{"message": err.Error()})
 	}
 	c.writer.WriteHeader(status)
 	if _, e := c.writer.Write([]byte(err.Error())); e != nil {
@@ -839,10 +903,8 @@ func (c *ctx) PageExpired(err ...error) error {
 }
 
 func (c *ctx) NoContent() error {
-	_, err := c.SetStatus(http.StatusNoContent).Write(nil)
-	if err != nil {
-		return c.Error(http.StatusInternalServerError, err)
-	}
+	c.SetStatus(http.StatusNoContent)
+	c.writer.WriteHeader(http.StatusNoContent)
 	return nil
 }
 

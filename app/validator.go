@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -21,13 +22,60 @@ import (
 )
 
 type Validator struct {
-	Errors shared.ValidationErrors
+	Errors          shared.ValidationErrors
+	activeURLConfig activeURLConfig
 }
 
 func NewValidator() *Validator {
 	return &Validator{
-		Errors: make(map[string][]string),
+		Errors:          make(map[string][]string),
+		activeURLConfig: defaultActiveURLConfig(),
 	}
+}
+
+// ActiveURLConfig controls the network access performed by ActiveURL.
+// Private targets are rejected unless AllowPrivateHosts is explicitly enabled.
+type ActiveURLConfig struct {
+	Client            *http.Client
+	MaxResponseBytes  int64
+	MaxRedirects      int
+	Timeout           time.Duration
+	AllowPrivateHosts bool
+}
+
+type activeURLConfig struct {
+	ActiveURLConfig
+}
+
+func defaultActiveURLConfig() activeURLConfig {
+	return activeURLConfig{ActiveURLConfig: ActiveURLConfig{
+		Client:           &http.Client{Timeout: 10 * time.Second, Transport: safeActiveURLTransport()},
+		MaxResponseBytes: 1 << 20,
+		MaxRedirects:     5,
+		Timeout:          10 * time.Second,
+	}}
+}
+
+// NewValidatorWithActiveURLConfig creates a validator with explicit ActiveURL limits.
+func NewValidatorWithActiveURLConfig(config ActiveURLConfig) *Validator {
+	v := NewValidator()
+	if config.Client != nil {
+		v.activeURLConfig.Client = config.Client
+	}
+	if config.MaxResponseBytes > 0 {
+		v.activeURLConfig.MaxResponseBytes = config.MaxResponseBytes
+	}
+	if config.MaxRedirects > 0 {
+		v.activeURLConfig.MaxRedirects = config.MaxRedirects
+	}
+	if config.Timeout > 0 {
+		v.activeURLConfig.Timeout = config.Timeout
+		if config.Client == nil {
+			v.activeURLConfig.Client = &http.Client{Timeout: config.Timeout, Transport: safeActiveURLTransport()}
+		}
+	}
+	v.activeURLConfig.AllowPrivateHosts = config.AllowPrivateHosts
+	return v
 }
 
 func (v *Validator) AddError(field, message string) {
@@ -416,7 +464,33 @@ func (f *vField) Timezone() *vField {
 // ActiveURL checks if the URL is active and reachable
 func (f *vField) ActiveURL() *vField {
 	if v, ok := f.value.(string); ok {
-		resp, err := http.Get(v)
+		config := f.vee.activeURLConfig
+		target, err := url.ParseRequestURI(v)
+		if err != nil || target.Scheme != "http" && target.Scheme != "https" || target.Hostname() == "" {
+			f.vee.AddError(f.name, "The URL is not active or reachable")
+			return f
+		}
+		if !config.AllowPrivateHosts {
+			if err := validateActiveURLHost(target, config.Timeout); err != nil {
+				f.vee.AddError(f.name, "The URL is not active or reachable")
+				return f
+			}
+		}
+
+		client := *config.Client
+		client.Timeout = config.Timeout
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) > config.MaxRedirects {
+				return fmt.Errorf("too many redirects")
+			}
+			if !config.AllowPrivateHosts {
+				if err := validateActiveURLHost(req.URL, config.Timeout); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		resp, err := client.Get(v)
 		if err != nil {
 			f.vee.AddError(f.name, "The URL is not active or reachable")
 			return f
@@ -425,9 +499,68 @@ func (f *vField) ActiveURL() *vField {
 
 		if resp.StatusCode != http.StatusOK {
 			f.vee.AddError(f.name, "The URL returned a non-OK status")
+			return f
+		}
+		bytesRead, err := io.Copy(io.Discard, io.LimitReader(resp.Body, config.MaxResponseBytes+1))
+		if err != nil {
+			f.vee.AddError(f.name, "The URL is not active or reachable")
+		} else if bytesRead > config.MaxResponseBytes || resp.ContentLength > config.MaxResponseBytes {
+			f.vee.AddError(f.name, "The URL response is too large")
 		}
 	}
 	return f
+}
+
+func validateActiveURLHost(target *url.URL, timeout time.Duration) error {
+	host := strings.TrimSuffix(strings.ToLower(target.Hostname()), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("private host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateActiveURLIP(ip) {
+			return fmt.Errorf("private address")
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		return fmt.Errorf("unable to resolve host")
+	}
+	for _, ip := range ips {
+		if isPrivateActiveURLIP(ip) {
+			return fmt.Errorf("private address")
+		}
+	}
+	return nil
+}
+
+func isPrivateActiveURLIP(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+func safeActiveURLTransport() http.RoundTripper {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if isPrivateActiveURLIP(ip) {
+					return nil, fmt.Errorf("private address")
+				}
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+		},
+	}
 }
 
 // AlphaDash checks if the string contains only alpha-numeric characters, dashes, or underscores

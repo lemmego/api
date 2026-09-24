@@ -1,7 +1,11 @@
 package app
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewValidator(t *testing.T) {
@@ -229,5 +233,66 @@ func TestForEach(t *testing.T) {
 	v2.Field("items", []string{"a", "b", "c"}).ForEach(func(f *vField) *vField { return f.Required() })
 	if !v2.IsValid() {
 		t.Error("all non-empty items should pass ForEach")
+	}
+}
+
+func TestActiveURLRejectsPrivateHostsByDefault(t *testing.T) {
+	v := NewValidator()
+	v.Field("url", "http://127.0.0.1").ActiveURL()
+
+	if v.IsValid() {
+		t.Fatal("private ActiveURL target should fail")
+	}
+}
+
+func TestActiveURLUsesInjectedClientAndBoundsResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/large" {
+			w.Header().Del("Content-Length")
+			_, _ = w.Write([]byte(strings.Repeat("x", 32)))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := ActiveURLConfig{
+		Client:            server.Client(),
+		MaxResponseBytes:  16,
+		MaxRedirects:      2,
+		Timeout:           time.Second,
+		AllowPrivateHosts: true,
+	}
+
+	valid := NewValidatorWithActiveURLConfig(config)
+	valid.Field("url", server.URL).ActiveURL()
+	if !valid.IsValid() {
+		t.Fatalf("expected httptest URL to pass: %v", valid.Errors)
+	}
+
+	large := NewValidatorWithActiveURLConfig(config)
+	large.Field("url", server.URL+"/large").ActiveURL()
+	if large.IsValid() {
+		t.Fatal("oversized response should fail")
+	}
+}
+
+func TestActiveURLLimitsRedirects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", r.URL.Path)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer server.Close()
+
+	v := NewValidatorWithActiveURLConfig(ActiveURLConfig{
+		Client:            server.Client(),
+		MaxRedirects:      1,
+		Timeout:           time.Second,
+		AllowPrivateHosts: true,
+	})
+	v.Field("url", server.URL+"/redirect").ActiveURL()
+
+	if v.IsValid() {
+		t.Fatal("redirect loop should fail")
 	}
 }
