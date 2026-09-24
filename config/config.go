@@ -77,6 +77,18 @@ func (m M) Lookup(key string) (any, bool) {
 	return lookup(m, strings.Split(key, "."))
 }
 
+// LookupAs returns a value at key asserted to T without panicking on a
+// missing key or type mismatch.
+func (m M) LookupAs[T any](key string) (T, bool) {
+	value, ok := m.Lookup(key)
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	result, ok := value.(T)
+	return result, ok
+}
+
 // Lookup returns a typed value at key without panicking on missing or mismatched values.
 func Lookup[T any](m M, key string) (T, bool) {
 	value, ok := m.Lookup(key)

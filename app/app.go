@@ -110,6 +110,9 @@ type AppCore interface {
 	// Service retrieves a service instance from the service container by type
 	Service(service any) any
 
+	// Services returns the typed application service registry.
+	Services() *ServiceRegistry
+
 	// EventEmitter provides event publishing and subscription capabilities
 	EventEmitter
 }
@@ -144,7 +147,7 @@ type application struct {
 
 	publishables    []*Publishable   // Assets and files that can be published
 	providers       []Provider       // Service providers for dependency injection
-	serviceRegistry *serviceRegistry // Container for registered services
+	serviceRegistry *ServiceRegistry // Container for registered services
 	eventRegistry   *eventRegistry   // Event system for application events
 
 	// Graceful shutdown tracking
@@ -199,7 +202,7 @@ func (a *application) Config() config.Configuration {
 }
 
 func (a *application) AddService(service any) {
-	a.serviceRegistry.Register(service)
+	a.serviceRegistry.RegisterValue(service)
 }
 
 func (a *application) Service(service any) any {
@@ -208,6 +211,10 @@ func (a *application) Service(service any) any {
 		return nil
 	}
 	return val
+}
+
+func (a *application) Services() *ServiceRegistry {
+	return a.serviceRegistry
 }
 
 // WithConfig returns an OptFunc that sets the configuration map for the application.

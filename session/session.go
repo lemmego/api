@@ -6,6 +6,8 @@
 package session
 
 import (
+	"context"
+
 	"github.com/alexedwards/scs/v2"
 )
 
@@ -29,4 +31,16 @@ func New(store scs.Store, cookie scs.SessionCookie) *Session {
 	s.Store = store
 	s.Cookie = cookie
 	return &Session{s}
+}
+
+// GetAs retrieves a session value and asserts it to T.
+func (s *Session) GetAs[T any](ctx context.Context, key string) (T, bool) {
+	value, ok := s.Get(ctx, key).(T)
+	return value, ok
+}
+
+// PopAs retrieves and removes a session value, asserting it to T.
+func (s *Session) PopAs[T any](ctx context.Context, key string) (T, bool) {
+	value, ok := s.Pop(ctx, key).(T)
+	return value, ok
 }

@@ -30,7 +30,8 @@ type ServiceDescriptor struct {
 	ServiceType reflect.Type // The type of service to create
 	Factory     any          // Factory function to create the service
 	Lifetime    Lifetime     // How long the service instance should live
-	instance    any          // Cached instance for singleton/scoped services
+	instance    any          // Cached singleton instance
+	scoped      map[*Container]any
 	mu          sync.RWMutex // Mutex for thread-safe instance creation
 }
 
@@ -70,6 +71,26 @@ func (c *Container) RegisterInstance[T any](instance T) error {
 	return RegisterInstance[T](c, instance)
 }
 
+// Register registers a service through the concrete container receiver.
+func (c *Container) Register[T any](lifetime Lifetime, factory any) error {
+	return Register[T](c, lifetime, factory)
+}
+
+// RegisterSingleton registers a singleton through the concrete container receiver.
+func (c *Container) RegisterSingleton[T any](factory any) error {
+	return RegisterSingleton[T](c, factory)
+}
+
+// RegisterTransient registers a transient service through the concrete container receiver.
+func (c *Container) RegisterTransient[T any](factory any) error {
+	return RegisterTransient[T](c, factory)
+}
+
+// RegisterScoped registers a scoped service through the concrete container receiver.
+func (c *Container) RegisterScoped[T any](factory any) error {
+	return RegisterScoped[T](c, factory)
+}
+
 // New creates a new DI container
 func New() *Container {
 	return &Container{
@@ -89,8 +110,7 @@ func (c *Container) CreateScope() *Container {
 
 // Register registers a service with explicit type
 func Register[T any](c *Container, lifetime Lifetime, factory any) error {
-	var zero T
-	serviceType := reflect.TypeOf(zero)
+	serviceType := reflect.TypeFor[T]()
 
 	// Validate factory function
 	factoryType := reflect.TypeOf(factory)
@@ -123,6 +143,7 @@ func Register[T any](c *Container, lifetime Lifetime, factory any) error {
 		ServiceType: serviceType,
 		Factory:     factory,
 		Lifetime:    lifetime,
+		scoped:      make(map[*Container]any),
 	}
 
 	return nil
@@ -145,8 +166,7 @@ func RegisterScoped[T any](c *Container, factory any) error {
 
 // RegisterInstance registers an existing instance as a singleton
 func RegisterInstance[T any](c *Container, instance T) error {
-	var zero T
-	serviceType := reflect.TypeOf(zero)
+	serviceType := reflect.TypeFor[T]()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -164,7 +184,7 @@ func RegisterInstance[T any](c *Container, instance T) error {
 // Resolve resolves a service by type
 func Resolve[T any](c *Container) (T, error) {
 	var zero T
-	serviceType := reflect.TypeOf(zero)
+	serviceType := reflect.TypeFor[T]()
 
 	result, err := c.resolve(serviceType)
 	if err != nil {
@@ -192,15 +212,9 @@ func (c *Container) resolve(serviceType reflect.Type) (any, error) {
 	}()
 
 	// Look up service descriptor
-	c.mu.RLock()
-	descriptor, exists := c.services[serviceType]
-	c.mu.RUnlock()
+	descriptor, exists := c.findDescriptor(serviceType)
 
 	if !exists {
-		// Check parent container for scoped containers
-		if c.parent != nil {
-			return c.parent.resolve(serviceType)
-		}
 		return nil, fmt.Errorf("service of type %v not registered", serviceType)
 	}
 
@@ -270,8 +284,7 @@ func (c *Container) resolve(serviceType reflect.Type) (any, error) {
 	// Check for cached scoped instance
 	if descriptor.Lifetime == Scoped {
 		descriptor.mu.RLock()
-		if descriptor.instance != nil {
-			instance := descriptor.instance
+		if instance, ok := descriptor.scoped[c]; ok {
 			descriptor.mu.RUnlock()
 			return instance, nil
 		}
@@ -314,10 +327,14 @@ func (c *Container) resolve(serviceType reflect.Type) (any, error) {
 
 	instance := results[0].Interface()
 
-	// Cache instance if scoped (singleton is already handled above)
+	// Cache the instance only for the requesting scope.
 	if descriptor.Lifetime == Scoped {
 		descriptor.mu.Lock()
-		descriptor.instance = instance
+		if existing, ok := descriptor.scoped[c]; ok {
+			descriptor.mu.Unlock()
+			return existing, nil
+		}
+		descriptor.scoped[c] = instance
 		descriptor.mu.Unlock()
 	}
 
@@ -335,17 +352,21 @@ func MustResolve[T any](c *Container) T {
 
 // Has checks if a service type is registered
 func Has[T any](c *Container) bool {
-	var zero T
-	serviceType := reflect.TypeOf(zero)
-
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	_, exists := c.services[serviceType]
-	if !exists && c.parent != nil {
-		return Has[T](c.parent)
-	}
+	_, exists := c.findDescriptor(reflect.TypeFor[T]())
 	return exists
+}
+
+func (c *Container) findDescriptor(serviceType reflect.Type) (*ServiceDescriptor, bool) {
+	c.mu.RLock()
+	descriptor, exists := c.services[serviceType]
+	c.mu.RUnlock()
+	if exists {
+		return descriptor, true
+	}
+	if c.parent != nil {
+		return c.parent.findDescriptor(serviceType)
+	}
+	return nil, false
 }
 
 // Clear removes all registered services

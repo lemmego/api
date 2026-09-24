@@ -9,10 +9,18 @@ type testSvc struct{ val string }
 
 func (t *testSvc) Provide(a App) error { return nil }
 
+type testServiceContract interface {
+	Value() string
+}
+
+type testServiceImplementation struct{ value string }
+
+func (s *testServiceImplementation) Value() string { return s.value }
+
 func TestRegisterAndGet(t *testing.T) {
 	sr := newServiceRegistry()
 	sr.Register(&testSvc{val: "hello"})
-	val, ok := sr.Get(&testSvc{})
+	val, ok := sr.GetValue(&testSvc{})
 	if !ok {
 		t.Error("Get returned false for registered service")
 	}
@@ -49,7 +57,7 @@ func TestGetByType(t *testing.T) {
 
 func TestGetNotFound(t *testing.T) {
 	sr := newServiceRegistry()
-	_, ok := sr.Get(&testSvc{})
+	_, ok := sr.GetValue(&testSvc{})
 	if ok {
 		t.Error("Get should return false for missing service")
 	}
@@ -63,7 +71,7 @@ func TestRemove(t *testing.T) {
 	if !removed {
 		t.Error("Remove should return true")
 	}
-	_, ok := sr.Get(s)
+	_, ok := sr.GetValue(s)
 	if ok {
 		t.Error("service still exists after remove")
 	}
@@ -78,6 +86,7 @@ func TestRemoveNonexistent(t *testing.T) {
 }
 
 type testSvc2 struct{ val string }
+
 func (t *testSvc2) Provide(a App) error { return nil }
 
 func TestClear(t *testing.T) {
@@ -92,11 +101,11 @@ func TestClear(t *testing.T) {
 
 func TestHas(t *testing.T) {
 	sr := newServiceRegistry()
-	if sr.Has(&testSvc{}) {
+	if sr.HasValue(&testSvc{}) {
 		t.Error("Has should return false for missing")
 	}
 	sr.Register(&testSvc{val: "present"})
-	if !sr.Has(&testSvc{}) {
+	if !sr.HasValue(&testSvc{}) {
 		t.Error("Has should return true for registered type")
 	}
 }
@@ -147,3 +156,25 @@ func TestGetTypedNotFound(t *testing.T) {
 	}
 }
 
+func TestTypedRegistrySupportsInterfaceRegistration(t *testing.T) {
+	sr := newServiceRegistry()
+	sr.Register[testServiceContract](&testServiceImplementation{value: "typed"})
+
+	service, ok := sr.Lookup[testServiceContract]()
+	if !ok || service.Value() != "typed" {
+		t.Fatalf("typed lookup = %v, %v", service, ok)
+	}
+	if !sr.Has[testServiceContract]() {
+		t.Fatal("typed registry should report the interface as registered")
+	}
+}
+
+func TestApplicationExposesServiceRegistry(t *testing.T) {
+	a := Configure()
+	a.Services().Register(&testSvc{val: "service"})
+
+	service, ok := a.Services().Lookup[*testSvc]()
+	if !ok || service.val != "service" {
+		t.Fatalf("application service lookup = %v, %v", service, ok)
+	}
+}

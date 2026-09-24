@@ -12,6 +12,14 @@ type testRepo struct {
 	Svc *testService `di:"inject"`
 }
 
+type testInterface interface {
+	Name() string
+}
+
+type testImplementation struct{}
+
+func (*testImplementation) Name() string { return "implementation" }
+
 func TestRegisterAndResolveSingleton(t *testing.T) {
 	c := New()
 	err := RegisterSingleton[*testService](c, func() *testService {
@@ -189,5 +197,46 @@ func TestGenericContainerMethods(t *testing.T) {
 	}
 	if c.MustResolve[int]() != 42 {
 		t.Fatal("For via method did not register the instance")
+	}
+	if err := c.RegisterSingleton[*testService](func() *testService {
+		return &testService{Value: "registered"}
+	}); err != nil {
+		t.Fatalf("RegisterSingleton via method: %v", err)
+	}
+	if c.MustResolve[*testService]().Value != "registered" {
+		t.Fatal("RegisterSingleton via method did not register the service")
+	}
+}
+
+func TestGenericMethodsSupportInterfaceTypes(t *testing.T) {
+	c := New()
+	if err := c.RegisterInstance[testInterface](&testImplementation{}); err != nil {
+		t.Fatalf("register interface: %v", err)
+	}
+	value, err := c.Resolve[testInterface]()
+	if err != nil {
+		t.Fatalf("resolve interface: %v", err)
+	}
+	if value.Name() != "implementation" {
+		t.Fatalf("unexpected interface value: %s", value.Name())
+	}
+}
+
+func TestScopedServicesAreIsolatedPerScope(t *testing.T) {
+	root := New()
+	if err := root.RegisterScoped[*testService](func() *testService {
+		return &testService{}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	first := root.CreateScope()
+	second := root.CreateScope()
+	firstValue := first.MustResolve[*testService]()
+	if firstValue != first.MustResolve[*testService]() {
+		t.Fatal("scoped service should be reused within a scope")
+	}
+	if firstValue == second.MustResolve[*testService]() {
+		t.Fatal("scoped service should not be shared across scopes")
 	}
 }

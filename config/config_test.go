@@ -110,6 +110,9 @@ func TestLookupIsSafeAndTyped(t *testing.T) {
 	if _, ok := m.Lookup("value.child"); ok {
 		t.Fatal("lookup should reject traversal through a non-map")
 	}
+	if port, ok := m.LookupAs[int]("database.port"); !ok || port != 5432 {
+		t.Fatalf("expected receiver lookup to find port, got %d, %v", port, ok)
+	}
 }
 
 func TestGetAll(t *testing.T) {
