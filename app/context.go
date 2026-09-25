@@ -477,7 +477,17 @@ func (c *ctx) WithInput() *ctx {
 }
 
 func (c *ctx) Back() error {
-	return c.Redirect(c.Referer())
+	target := c.Referer()
+	if target == "" {
+		// Without a Referer there is nothing to go "back" to, and redirecting
+		// to an empty location is not a response any client can follow. The
+		// current path re-renders the page the request came from.
+		target = c.Request().URL.Path
+		if target == "" {
+			target = "/"
+		}
+	}
+	return c.Redirect(target)
 }
 
 func (c *ctx) Referer() string {
@@ -851,13 +861,28 @@ func (c *ctx) ValidationError(err error) error {
 		return c.Error(http.StatusInternalServerError, err)
 	}
 
+	// An Inertia request must receive an Inertia-shaped response. Deciding by
+	// Accept or Referer gets this wrong: an XHR sends Accept: */*, which reads
+	// as "wants JSON", so a failed form came back as a JSON body and the
+	// client threw "All Inertia requests must receive a valid Inertia
+	// response". The X-Inertia header is the reliable signal.
+	if c.IsInertia() {
+		c.PutSession("errors", e)
+		return c.WithInput().Back()
+	}
+
 	if c.WantsJSON() || c.Referer() == "" {
 		return c.SetStatus(http.StatusUnprocessableEntity).JSON(M{"errors": err})
 	}
 
-	c.PutSession("errors", err.(shared.ValidationErrors))
+	c.PutSession("errors", e)
 
 	return c.WithInput().Back()
+}
+
+// IsInertia reports whether the request came from an Inertia client.
+func (c *ctx) IsInertia() bool {
+	return c.Header("X-Inertia") != ""
 }
 
 func (c *ctx) InternalServerError(err ...error) error {

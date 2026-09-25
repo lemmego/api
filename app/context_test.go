@@ -499,3 +499,46 @@ func TestQuery(t *testing.T) {
 		t.Errorf("expected empty, got %s", got)
 	}
 }
+
+// An XHR sends Accept: */*, which reads as "wants JSON". Deciding the response
+// shape from that meant a failed Inertia form came back as a JSON body, and
+// the client threw "All Inertia requests must receive a valid Inertia
+// response". The X-Inertia header is the reliable signal.
+func TestIsInertiaDetectsTheHeader(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/login", nil)
+	c := &ctx{request: request}
+	if c.IsInertia() {
+		t.Fatal("a request without the header is not an Inertia request")
+	}
+
+	request.Header.Set("X-Inertia", "true")
+	if !c.IsInertia() {
+		t.Fatal("the X-Inertia header must be detected")
+	}
+}
+
+// Back redirects to the Referer, but a client that sends none must still get a
+// location it can follow rather than an empty one.
+func TestBackFallsBackToTheCurrentPathWithoutAReferer(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", nil)
+	c := &ctx{request: request, writer: recorder}
+
+	if err := c.Back(); err != nil {
+		t.Fatal(err)
+	}
+	if got := recorder.Header().Get("Location"); got != "/login" {
+		t.Fatalf("expected a usable location, got %q", got)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/login", nil)
+	request.Header.Set("Referer", "http://example.com/register")
+	c = &ctx{request: request, writer: recorder}
+	if err := c.Back(); err != nil {
+		t.Fatal(err)
+	}
+	if got := recorder.Header().Get("Location"); got != "http://example.com/register" {
+		t.Fatalf("a Referer must still win, got %q", got)
+	}
+}

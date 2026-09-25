@@ -7,15 +7,15 @@ import (
 
 var (
 	// Sentinel error values for HTTP errors.
-	ErrUnauthorized           = &UnauthorizedError{HttpMessage{http.StatusUnauthorized, "Unauthorized"}}
-	ErrForbidden              = &ForbiddenError{HttpMessage{http.StatusForbidden, "Forbidden"}}
-	ErrNotFound               = &NotFoundError{HttpMessage{http.StatusNotFound, "Not Found"}}
-	ErrBadRequest             = &BadRequestError{HttpMessage{http.StatusBadRequest, "Bad Request"}}
-	ErrMethodNotAllowed       = &MethodNotAllowedError{HttpMessage{http.StatusMethodNotAllowed, "Method Not Allowed"}}
-	ErrPageExpired            = &PageExpiredError{HttpMessage{419, "Page Expired"}}
-	ErrUnprocessableEntity    = &UnprocessableEntityError{HttpMessage{http.StatusUnprocessableEntity, "Unprocessable Entity"}}
-	ErrInternalServerError    = &InternalServerError{HttpMessage{http.StatusInternalServerError, "Internal Server Error"}}
-	ErrServiceNotFound 		  = errors.New("service not found")
+	ErrUnauthorized        = &UnauthorizedError{HttpMessage{http.StatusUnauthorized, "Unauthorized"}}
+	ErrForbidden           = &ForbiddenError{HttpMessage{http.StatusForbidden, "Forbidden"}}
+	ErrNotFound            = &NotFoundError{HttpMessage{http.StatusNotFound, "Not Found"}}
+	ErrBadRequest          = &BadRequestError{HttpMessage{http.StatusBadRequest, "Bad Request"}}
+	ErrMethodNotAllowed    = &MethodNotAllowedError{HttpMessage{http.StatusMethodNotAllowed, "Method Not Allowed"}}
+	ErrPageExpired         = &PageExpiredError{HttpMessage{419, "Page Expired"}}
+	ErrUnprocessableEntity = &UnprocessableEntityError{HttpMessage{http.StatusUnprocessableEntity, "Unprocessable Entity"}}
+	ErrInternalServerError = &InternalServerError{HttpMessage{http.StatusInternalServerError, "Internal Server Error"}}
+	ErrServiceNotFound     = errors.New("service not found")
 )
 
 type HttpMessage struct {
