@@ -19,6 +19,10 @@ var (
 )
 
 // Renderer defines the interface for types that can render content.
+// csrfTokenKey is where the CSRF middleware stores its token, on both the
+// request context and the template data.
+const csrfTokenKey = "_token"
+
 type Renderer interface {
 	Render(w io.Writer) error
 }
@@ -97,11 +101,22 @@ func (t *Template) Render(w io.Writer) error {
 		validationErrors = vErrs
 	}
 
-	data := make(map[string]any, len(t.data)+1)
+	data := make(map[string]any, len(t.data)+2)
 	for key, value := range t.data {
 		data[key] = value
 	}
 	data["errors"] = validationErrors
+
+	// The CSRF middleware puts the token on the request context, and every
+	// form that posts needs it in a hidden _token field. Passing it through by
+	// hand in each handler is easy to forget, and forgetting it produces a 419
+	// at submit time rather than anything visible while building the page.
+	// An explicit value wins, so a caller can still override it.
+	if _, ok := data[csrfTokenKey]; !ok && t.ctx != nil {
+		if token, ok := t.ctx.Get(csrfTokenKey).(string); ok && token != "" {
+			data[csrfTokenKey] = token
+		}
+	}
 
 	return tmpl.Execute(w, data)
 }

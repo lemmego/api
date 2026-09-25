@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/lemmego/api/app"
 )
 
 func TestLoadTemplatesReturnsErrors(t *testing.T) {
@@ -90,4 +92,90 @@ func setTemplateCache(t *testing.T, tmpl *template.Template) {
 	templateCacheMu.Lock()
 	templateCache = map[string]*template.Template{"page.page.gohtml": tmpl}
 	templateCacheMu.Unlock()
+}
+
+// tokenContext supplies just the context lookup Render performs, leaving the
+// rest of app.Context embedded so any other call fails loudly.
+type tokenContext struct {
+	app.Context
+	values map[string]any
+}
+
+func (c tokenContext) Get(key string) any { return c.values[key] }
+
+func (c tokenContext) PopSession(string) any { return nil }
+
+// Every form that posts needs the CSRF token in a hidden _token field.
+// Requiring each handler to pass it through by hand means forgetting it shows
+// up as a 419 at submit time rather than as anything visible while building
+// the page, so Render supplies it the same way it supplies errors.
+func TestRenderSuppliesTheCSRFToken(t *testing.T) {
+	setTemplateCache(t, template.Must(template.New("page.page.gohtml").Parse("{{._token}}")))
+
+	ctx := tokenContext{values: map[string]any{"_token": "tok-abc"}}
+	var rendered bytes.Buffer
+	if err := NewTemplate(ctx, "page.page.gohtml").Render(&rendered); err != nil {
+		t.Fatal(err)
+	}
+
+	if rendered.String() != "tok-abc" {
+		t.Fatalf("expected the token from the request context, got %q", rendered.String())
+	}
+}
+
+// An explicit value wins, so a caller can still override it.
+func TestRenderKeepsAnExplicitCSRFToken(t *testing.T) {
+	setTemplateCache(t, template.Must(template.New("page.page.gohtml").Parse("{{._token}}")))
+
+	ctx := tokenContext{values: map[string]any{"_token": "from-context"}}
+	var rendered bytes.Buffer
+	err := NewTemplate(ctx, "page.page.gohtml").
+		WithData(map[string]any{"_token": "explicit"}).
+		Render(&rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rendered.String() != "explicit" {
+		t.Fatalf("explicit data was overwritten: %q", rendered.String())
+	}
+}
+
+// Rendering without a context, or before the CSRF middleware has run, must
+// still work rather than panic or inject an empty token.
+func TestRenderWithoutACSRFToken(t *testing.T) {
+	setTemplateCache(t, template.Must(template.New("page.page.gohtml").Parse("[{{._token}}]")))
+
+	cases := map[string]app.Context{
+		"nil context":        nil,
+		"no token set":       tokenContext{values: map[string]any{}},
+		"token not a string": tokenContext{values: map[string]any{"_token": 42}},
+		"empty token":        tokenContext{values: map[string]any{"_token": ""}},
+	}
+	for name, ctx := range cases {
+		t.Run(name, func(t *testing.T) {
+			var rendered bytes.Buffer
+			if err := NewTemplate(ctx, "page.page.gohtml").Render(&rendered); err != nil {
+				t.Fatal(err)
+			}
+			if rendered.String() != "[]" {
+				t.Fatalf("unexpected output: %q", rendered.String())
+			}
+		})
+	}
+}
+
+// Render must not write the injected token back into the caller's map.
+func TestRenderDoesNotMutateDataWithTheCSRFToken(t *testing.T) {
+	setTemplateCache(t, template.Must(template.New("page.page.gohtml").Parse("{{._token}}")))
+
+	data := map[string]any{"name": "Ada"}
+	ctx := tokenContext{values: map[string]any{"_token": "tok-abc"}}
+	if err := NewTemplate(ctx, "page.page.gohtml").WithData(data).Render(&bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := data["_token"]; ok {
+		t.Fatal("render added _token to caller data")
+	}
 }
