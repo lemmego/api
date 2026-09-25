@@ -44,23 +44,29 @@ func getRandomToken(length int) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// matchedToken reports whether the request carries the session's CSRF token.
+//
+// It deliberately does not rotate the token. Rotating on every verified
+// request means any client that reuses a token — one that missed a Set-Cookie,
+// had a request already in flight, was restored from the back/forward cache,
+// or is a second tab — is rejected with 419, and stays rejected until a full
+// page load. Laravel, Rails and Django all keep a per-session token for this
+// reason; a CSRF token is a shared secret, not a nonce. The token still
+// changes whenever the session itself is regenerated.
 func matchedToken(c app.HttpProvider) bool {
 	sessionToken := c.SessionString("_token")
 	token := getTokenFromRequest(c)
 
-	matched := false
-	if sessionToken != "" && token != "" {
-		// Use constant-time comparison to prevent timing attacks
-		if subtle.ConstantTimeCompare([]byte(sessionToken), []byte(token)) == 1 {
-			matched = true
-		}
-	}
+	return tokensMatch(sessionToken, token)
+}
 
-	if matched {
-		c.PutSession("_token", getRandomToken(40))
+// tokensMatch compares the session token with the one the request carried,
+// in constant time so the comparison leaks nothing through timing.
+func tokensMatch(sessionToken, requestToken string) bool {
+	if sessionToken == "" || requestToken == "" {
+		return false
 	}
-
-	return matched
+	return subtle.ConstantTimeCompare([]byte(sessionToken), []byte(requestToken)) == 1
 }
 
 func getTokenFromRequest(c app.HttpProvider) string {
@@ -135,7 +141,10 @@ func VerifyCSRF(opts *CSRFOpts) app.Handler {
 		}
 
 		if c.IsReading() || matchedToken(c) {
-			if c.WantsHTML() && !strings.HasPrefix(c.Request().URL.Path, "/static") {
+			// Refresh the cookie on every response, not only HTML ones. An XHR
+			// navigation that skipped it used to leave the client with nothing
+			// to send on the next write.
+			if !strings.HasPrefix(c.Request().URL.Path, "/static") {
 				token := ""
 				if val, ok := c.Session("_token").(string); ok && val != "" {
 					token = val

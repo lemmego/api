@@ -30,13 +30,13 @@ type RecoveryOpts struct {
 
 // Default recovery configuration for production
 var DefaultRecoveryOpts = &RecoveryOpts{
-	LogStacktrace:                true,
+	LogStacktrace:              true,
 	EnableStackTraceInResponse: false,
 }
 
 // Development recovery configuration
 var DevelopmentRecoveryOpts = &RecoveryOpts{
-	LogStacktrace:                true,
+	LogStacktrace:              true,
 	EnableStackTraceInResponse: true,
 }
 
@@ -94,7 +94,7 @@ func handlePanic(c app.Context, err interface{}, opts *RecoveryOpts) {
 	slog.LogAttrs(c.Request().Context(), slog.LevelError, "panic recovered", logAttrs...)
 
 	// Determine response based on client type
- acceptsHTML := strings.Contains(c.Request().Header.Get("Accept"), "text/html")
+	acceptsHTML := strings.Contains(c.Request().Header.Get("Accept"), "text/html")
 	acceptsJSON := strings.Contains(c.Request().Header.Get("Accept"), "application/json")
 
 	if acceptsJSON && !acceptsHTML {
@@ -195,8 +195,8 @@ func getStackTrace(err interface{}) string {
 
 		// Skip certain frames for cleaner output
 		if strings.Contains(line, "runtime.") ||
-		   strings.Contains(line, "panic(") ||
-		   strings.Contains(line, "handlePanic") {
+			strings.Contains(line, "panic(") ||
+			strings.Contains(line, "handlePanic") {
 			continue
 		}
 
