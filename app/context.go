@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"github.com/lemmego/api/session"
 	"io"
 	"log/slog"
 	"mime"
@@ -778,10 +779,8 @@ func (c *ctx) Get(key string) any {
 }
 
 func (c *ctx) PutSession(key string, value any) SessionGetSetter {
-	sess := c.App().Session()
-	//sess := session.Get(c.app)
-
-	if sess == nil {
+	sess, ok := Lookup[*session.Session](c.App())
+	if !ok || sess == nil {
 		e := errors.New("session not set")
 		slog.Error(e.Error())
 		return nil
@@ -792,10 +791,8 @@ func (c *ctx) PutSession(key string, value any) SessionGetSetter {
 }
 
 func (c *ctx) PopSession(key string) any {
-	sess := c.App().Session()
-	//sess := session.Get(c.app)
-
-	if sess == nil {
+	sess, ok := Lookup[*session.Session](c.App())
+	if !ok || sess == nil {
 		e := errors.New("session not set")
 		slog.Error(e.Error())
 		return nil
@@ -805,10 +802,8 @@ func (c *ctx) PopSession(key string) any {
 }
 
 func (c *ctx) PopSessionString(key string) string {
-	sess := c.App().Session()
-	//sess := session.Get(c.app)
-
-	if sess == nil {
+	sess, ok := Lookup[*session.Session](c.App())
+	if !ok || sess == nil {
 		e := errors.New("session not set")
 		slog.Error(e.Error())
 		return ""
@@ -818,10 +813,8 @@ func (c *ctx) PopSessionString(key string) string {
 }
 
 func (c *ctx) Session(key string) any {
-	sess := c.App().Session()
-	//sess := session.Get(c.app)
-
-	if sess == nil {
+	sess, ok := Lookup[*session.Session](c.App())
+	if !ok || sess == nil {
 		e := errors.New("session not set")
 		slog.Error(e.Error())
 		return nil
@@ -831,10 +824,8 @@ func (c *ctx) Session(key string) any {
 }
 
 func (c *ctx) SessionString(key string) string {
-	sess := c.App().Session()
-	//sess := session.Get(c.app)
-
-	if sess == nil {
+	sess, ok := Lookup[*session.Session](c.App())
+	if !ok || sess == nil {
 		e := errors.New("session not set")
 		slog.Error(e.Error())
 		return ""

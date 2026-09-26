@@ -164,7 +164,7 @@ func VerifyCSRF(opts *CSRFOpts) app.Handler {
 				c.SetCookie(&http.Cookie{
 					Name:     "XSRF-TOKEN",
 					Value:    token,
-					Expires:  time.Now().Add(config.Get("session.lifetime").(time.Duration)),
+					Expires:  time.Now().Add(csrfCookieLifetime()),
 					Path:     "/",
 					Domain:   "",
 					Secure:   c.App().InProduction(),
@@ -177,4 +177,26 @@ func VerifyCSRF(opts *CSRFOpts) app.Handler {
 
 		return c.PageExpired()
 	}
+}
+
+// defaultCSRFCookieLifetime is how long the token cookie lives when the session
+// configuration does not say.
+const defaultCSRFCookieLifetime = 2 * time.Hour
+
+// csrfCookieLifetime reads the session lifetime, which was previously asserted
+// straight out of the configuration — so a project whose session config was
+// absent, or that spelled the lifetime as a number of seconds rather than a
+// duration, panicked on the first request that set the token cookie.
+func csrfCookieLifetime() time.Duration {
+	switch value := config.Get("session.lifetime").(type) {
+	case time.Duration:
+		if value > 0 {
+			return value
+		}
+	case int:
+		if value > 0 {
+			return time.Duration(value) * time.Minute
+		}
+	}
+	return defaultCSRFCookieLifetime
 }

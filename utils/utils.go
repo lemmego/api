@@ -67,37 +67,27 @@ func StructToMap(obj interface{}) (map[string]interface{}, error) {
 	return ret, nil
 }
 
-func ConfigPath() string {
-	return config.Get("app.config_path").(string)
+// The paths below say where generated code goes. They are read from the
+// application's config, which a project may not have loaded — the generators
+// run outside a project too — so each falls back to the conventional location
+// rather than asserting. They previously asserted the value straight out of
+// the config and panicked when the app section was absent or a key was
+// missing.
+func projectPath(key, fallback string) string {
+	if value, ok := config.Get("app." + key).(string); ok && value != "" {
+		return value
+	}
+	return fallback
 }
 
-func CommandPath() string {
-	return config.Get("app.command_path").(string)
-}
-
-func HandlerPath() string {
-	return config.Get("app.handler_path").(string)
-}
-
-func InputPath() string {
-	return config.Get("app.input_path").(string)
-}
-
-func MiddlewarePath() string {
-	return config.Get("app.middleware_path").(string)
-}
-
-func MigrationPath() string {
-	return config.Get("app.migration_path").(string)
-}
-
-func ModelPath() string {
-	return config.Get("app.model_path").(string)
-}
-
-func RoutePath() string {
-	return config.Get("app.route_path").(string)
-}
+func ConfigPath() string     { return projectPath("config_path", "./internal/configs") }
+func CommandPath() string    { return projectPath("command_path", "./internal/commands") }
+func HandlerPath() string    { return projectPath("handler_path", "./internal/handlers") }
+func InputPath() string      { return projectPath("input_path", "./internal/inputs") }
+func MiddlewarePath() string { return projectPath("middleware_path", "./internal/middleware") }
+func MigrationPath() string  { return projectPath("migration_path", "./internal/migrations") }
+func ModelPath() string      { return projectPath("model_path", "./internal/models") }
+func RoutePath() string      { return projectPath("route_path", "./internal/routes") }
 
 func GenerateKey() ([]byte, error) {
 	key := make([]byte, 32)

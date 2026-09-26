@@ -149,3 +149,43 @@ func TestConfigPath(t *testing.T) {
 		t.Errorf("expected ./internal/routes, got %s", p)
 	}
 }
+
+// The generators run outside a project too, where no application config has
+// been loaded. Each path used to be asserted straight out of the config, so an
+// absent app section panicked rather than falling back.
+func TestProjectPathsWithoutAnAppConfig(t *testing.T) {
+	config.Set("app", nil)
+
+	paths := map[string]func() string{
+		"config":     ConfigPath,
+		"command":    CommandPath,
+		"handler":    HandlerPath,
+		"input":      InputPath,
+		"middleware": MiddlewarePath,
+		"migration":  MigrationPath,
+		"model":      ModelPath,
+		"route":      RoutePath,
+	}
+
+	for name, path := range paths {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("%sPath() panicked with no app config: %v", name, r)
+				}
+			}()
+			if got := path(); got == "" {
+				t.Errorf("%sPath() = %q, want a fallback", name, got)
+			}
+		})
+	}
+}
+
+// A configured path still wins.
+func TestProjectPathsPreferTheConfiguredValue(t *testing.T) {
+	config.Set("app", config.M{"model_path": "./domain/models"})
+
+	if got := ModelPath(); got != "./domain/models" {
+		t.Errorf("ModelPath() = %q, want the configured value", got)
+	}
+}

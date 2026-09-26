@@ -251,7 +251,15 @@ func deepCopyValue(value any) any {
 	}
 }
 
-// MustEnv retrieves an environment variable and converts it to the specified type or panics on failure
+// MustEnv reads an environment variable and converts it to the type of
+// fallback, or panics.
+//
+// Panicking is deliberate: a variable that is set but unreadable is a mistake,
+// and quietly using the fallback would hide it. But these calls run from the
+// init functions of a project's config package, before main and before
+// logging is configured, so the message has to carry everything needed to fix
+// the problem on its own — which variable, what it held, and what was
+// expected.
 func MustEnv[T any](key string, fallback T) T {
 	value, exists := os.LookupEnv(key)
 	if !exists {
@@ -285,14 +293,32 @@ func MustEnv[T any](key string, fallback T) T {
 	case string:
 		result = any(value).(T)
 	default:
-		panic(fmt.Sprintf("unsupported type for environment variable %s", key))
+		panic(fmt.Sprintf(
+			"config: %s cannot be read as %T; MustEnv supports string, int, float64, bool, time.Duration and http.SameSite",
+			key, fallback))
 	}
 
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("config: %s is set to %q, which is not a valid %T (%v)%s",
+			key, value, fallback, err, hintFor(fallback)))
 	}
 
 	return result
+}
+
+// hintFor adds the example that turns a parse error into an obvious fix. A
+// duration is the one people get wrong: a plain number looks reasonable and is
+// not, and the underlying error says so in units nobody is thinking about.
+func hintFor(fallback any) string {
+	switch fallback.(type) {
+	case time.Duration:
+		return `; durations need a unit, for example "120m" or "2h"`
+	case bool:
+		return `; use true or false`
+	case http.SameSite:
+		return "; use lax, strict or none"
+	}
+	return ""
 }
 
 func parseSameSite(value string) (http.SameSite, error) {

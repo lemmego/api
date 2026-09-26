@@ -9,51 +9,51 @@ import (
 
 // MetricsCollector collects and aggregates application metrics
 type MetricsCollector struct {
-	mu                sync.RWMutex
-	httpRequests      *HTTPMetrics
-	counters          map[string]int64
-	gauges            map[string]int64
-	histograms        map[string]*Histogram
-	enabled           bool
+	mu           sync.RWMutex
+	httpRequests *HTTPMetrics
+	counters     map[string]int64
+	gauges       map[string]int64
+	histograms   map[string]*Histogram
+	enabled      bool
 }
 
 // HTTPMetrics tracks HTTP request metrics
 type HTTPMetrics struct {
-	TotalRequests   int64
-	ActiveRequests  int64
-	TotalErrors     int64
-	StatusCodes     map[int]int64
-	PathMetrics     map[string]*PathMetrics
-	MethodMetrics   map[string]int64
-	mu              sync.RWMutex
+	TotalRequests  int64
+	ActiveRequests int64
+	TotalErrors    int64
+	StatusCodes    map[int]int64
+	PathMetrics    map[string]*PathMetrics
+	MethodMetrics  map[string]int64
+	mu             sync.RWMutex
 }
 
 // PathMetrics tracks metrics for specific paths
 type PathMetrics struct {
-	TotalRequests   int64
-	TotalErrors     int64
-	AverageLatency  time.Duration
-	MaxLatency      time.Duration
-	StatusCodes     map[int]int64
-	mu              sync.RWMutex
+	TotalRequests  int64
+	TotalErrors    int64
+	AverageLatency time.Duration
+	MaxLatency     time.Duration
+	StatusCodes    map[int]int64
+	mu             sync.RWMutex
 }
 
 // Histogram tracks distribution of values
 type Histogram struct {
-	Count    int64
-	Sum      int64
-	Min      int64
-	Max      int64
-	Buckets  map[int64]int64
-	mu       sync.RWMutex
+	Count   int64
+	Sum     int64
+	Min     int64
+	Max     int64
+	Buckets map[int64]int64
+	mu      sync.RWMutex
 }
 
 // MetricsConfig holds configuration for the metrics collector
 type MetricsConfig struct {
-	Enabled           bool
-	HistogramBuckets  []int64
-	TrackPaths        bool
-	TrackStatusCodes  bool
+	Enabled          bool
+	HistogramBuckets []int64
+	TrackPaths       bool
+	TrackStatusCodes bool
 }
 
 // NewMetricsCollector creates a new metrics collector
@@ -348,21 +348,21 @@ func (h *Histogram) findBucket(value int64) int64 {
 
 // HTTPMetricsSnapshot represents an immutable snapshot of HTTP metrics
 type HTTPMetricsSnapshot struct {
-	TotalRequests  int64                        `json:"total_requests"`
-	ActiveRequests int64                        `json:"active_requests"`
-	TotalErrors    int64                        `json:"total_errors"`
-	StatusCodes    map[int]int64                `json:"status_codes"`
+	TotalRequests  int64                           `json:"total_requests"`
+	ActiveRequests int64                           `json:"active_requests"`
+	TotalErrors    int64                           `json:"total_errors"`
+	StatusCodes    map[int]int64                   `json:"status_codes"`
 	PathMetrics    map[string]*PathMetricsSnapshot `json:"path_metrics"`
-	MethodMetrics  map[string]int64             `json:"method_metrics"`
+	MethodMetrics  map[string]int64                `json:"method_metrics"`
 }
 
 // PathMetricsSnapshot represents an immutable snapshot of path metrics
 type PathMetricsSnapshot struct {
-	TotalRequests  int64           `json:"total_requests"`
-	TotalErrors    int64           `json:"total_errors"`
-	AverageLatency time.Duration   `json:"average_latency"`
-	MaxLatency     time.Duration   `json:"max_latency"`
-	StatusCodes    map[int]int64   `json:"status_codes"`
+	TotalRequests  int64         `json:"total_requests"`
+	TotalErrors    int64         `json:"total_errors"`
+	AverageLatency time.Duration `json:"average_latency"`
+	MaxLatency     time.Duration `json:"max_latency"`
+	StatusCodes    map[int]int64 `json:"status_codes"`
 }
 
 // HistogramSnapshot represents an immutable snapshot of a histogram

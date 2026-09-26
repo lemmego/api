@@ -3,6 +3,7 @@ package config
 import (
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -590,5 +591,71 @@ func TestLookupSeparatesAStoredZeroFromAnAbsentKey(t *testing.T) {
 	}
 	if _, ok := m.Lookup("absent"); ok {
 		t.Error("Lookup() found a key that is not there")
+	}
+}
+
+// These calls run from a project's config package init, before main and
+// before logging, so the panic message is the only thing the reader gets. It
+// used to be the bare parse error — "time: invalid duration \"120\"" — with no
+// mention of which variable held it.
+func TestMustEnvNamesTheVariableAndTheValue(t *testing.T) {
+	t.Setenv("SESSION_LIFETIME", "120")
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("MustEnv accepted a duration with no unit")
+		}
+		message, _ := r.(string)
+		for _, want := range []string{"SESSION_LIFETIME", `"120"`, "unit", "120m"} {
+			if !strings.Contains(message, want) {
+				t.Errorf("the panic message does not mention %q: %s", want, message)
+			}
+		}
+	}()
+
+	MustEnv("SESSION_LIFETIME", time.Minute)
+}
+
+func TestMustEnvExplainsABadBool(t *testing.T) {
+	t.Setenv("APP_DEBUG", "yes please")
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("MustEnv accepted a malformed bool")
+		}
+		message, _ := r.(string)
+		if !strings.Contains(message, "APP_DEBUG") || !strings.Contains(message, "true or false") {
+			t.Errorf("unhelpful message: %s", message)
+		}
+	}()
+
+	MustEnv("APP_DEBUG", false)
+}
+
+// An unsupported type is a programming mistake rather than a configuration
+// one, and the message should say which types do work.
+func TestMustEnvNamesTheSupportedTypes(t *testing.T) {
+	t.Setenv("SOME_COUNT", "5")
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("MustEnv accepted an unsupported type")
+		}
+		message, _ := r.(string)
+		if !strings.Contains(message, "SOME_COUNT") || !strings.Contains(message, "time.Duration") {
+			t.Errorf("unhelpful message: %s", message)
+		}
+	}()
+
+	MustEnv("SOME_COUNT", int64(0))
+}
+
+// A variable that is absent still takes the fallback without complaint.
+func TestMustEnvFallsBackWhenAbsent(t *testing.T) {
+	if got := MustEnv("DEFINITELY_NOT_SET_ANYWHERE", 42); got != 42 {
+		t.Errorf("MustEnv() = %d, want the fallback", got)
 	}
 }

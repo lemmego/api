@@ -63,15 +63,15 @@ type LogEntry struct {
 
 // Logger is a structured logger that writes JSON formatted logs
 type Logger struct {
-	mu              sync.RWMutex
-	writer          io.Writer
-	minLevel        LogLevel
-	defaultFields   map[string]interface{}
-	callerSkip      int
-	isDiscard       bool
-	outputToFile    bool
-	filePath        string
-	file            *os.File
+	mu            sync.RWMutex
+	writer        io.Writer
+	minLevel      LogLevel
+	defaultFields map[string]interface{}
+	callerSkip    int
+	isDiscard     bool
+	outputToFile  bool
+	filePath      string
+	file          *os.File
 }
 
 // LoggerConfig holds configuration for the logger
@@ -94,7 +94,7 @@ func NewLogger(config LoggerConfig) (*Logger, error) {
 		minLevel:      config.MinLevel,
 		defaultFields: config.DefaultFields,
 		callerSkip:    config.CallerSkip + 1,
-		isDiscard:      true, // Start in discard mode
+		isDiscard:     true, // Start in discard mode
 	}
 
 	if config.DefaultFields == nil {
@@ -245,8 +245,8 @@ func (l *Logger) WithField(key string, value interface{}) *Logger {
 		minLevel:      l.minLevel,
 		defaultFields: newFields,
 		callerSkip:    l.callerSkip,
-		isDiscard:      l.isDiscard,
-		outputToFile:   l.outputToFile,
+		isDiscard:     l.isDiscard,
+		outputToFile:  l.outputToFile,
 		filePath:      l.filePath,
 		file:          l.file,
 	}
@@ -270,8 +270,8 @@ func (l *Logger) WithFields(fields map[string]interface{}) *Logger {
 		minLevel:      l.minLevel,
 		defaultFields: newFields,
 		callerSkip:    l.callerSkip,
-		isDiscard:      l.isDiscard,
-		outputToFile:   l.outputToFile,
+		isDiscard:     l.isDiscard,
+		outputToFile:  l.outputToFile,
 		filePath:      l.filePath,
 		file:          l.file,
 	}

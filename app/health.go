@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/lemmego/api/fs"
+	"github.com/lemmego/api/session"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -141,7 +143,7 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 			if check.CheckFunc == nil {
 				err = fmt.Errorf("health check function is nil")
 			} else {
-				err = check.CheckFunc(checkCtx)
+				err = runCheck(checkCtx, check.CheckFunc)
 			}
 			result.DurationMs = time.Since(start).Milliseconds()
 
@@ -349,9 +351,8 @@ func (h *HealthChecker) RegisterDefaultChecks() {
 				return fmt.Errorf("application not initialized")
 			}
 
-			fs := h.app.FileSystem()
-			if fs == nil {
-				return fmt.Errorf("file system not initialized")
+			if _, ok := Lookup[*fs.FileSystem](h.app); !ok {
+				return fmt.Errorf("no file system is registered")
 			}
 
 			// Try to access the file system
@@ -371,9 +372,8 @@ func (h *HealthChecker) RegisterDefaultChecks() {
 				return fmt.Errorf("application not initialized")
 			}
 
-			sess := h.app.Session()
-			if sess == nil {
-				return fmt.Errorf("session not initialized")
+			if _, ok := Lookup[*session.Session](h.app); !ok {
+				return fmt.Errorf("no session store is registered")
 			}
 
 			// Basic session store check
@@ -387,4 +387,21 @@ func (h *HealthChecker) RegisterDefaultChecks() {
 // GetHealthChecker returns the health checker for the application
 func (a *application) GetHealthChecker() *HealthChecker {
 	return NewHealthChecker(a)
+}
+
+// runCheck calls a health check and turns a panic into a failed check.
+//
+// Checks run in their own goroutines, so a panic in one is not reached by the
+// HTTP recovery middleware and takes the whole process down — an endpoint that
+// exists to report that something is wrong killing the server instead. The two
+// built-in checks used to do exactly that on an application with no filesystem
+// or session registered, because they resolved the service before testing
+// whether it was there.
+func runCheck(ctx context.Context, check func(context.Context) error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("health check panicked: %v", r)
+		}
+	}()
+	return check(ctx)
 }
