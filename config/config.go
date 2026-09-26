@@ -22,53 +22,72 @@ import (
 // type-safe accessor methods for configuration values with default value support.
 type M map[string]any
 
+// The accessors below return the value at key when it is present and of the
+// expected type, the caller's default when one was given, and otherwise the
+// zero value.
+//
+// That last case used to be an index-out-of-range panic: the default is
+// variadic and was read as defaultVal[0] without checking that one was passed.
+// Reading a key that is not there is the ordinary case for optional
+// configuration — a feature the user did not enable — so it returns a zero
+// rather than taking the process down. Use Lookup when you need to tell an
+// absent key from one holding a zero.
+
+func firstOr[T any](defaults []T) T {
+	if len(defaults) > 0 {
+		return defaults[0]
+	}
+	var zero T
+	return zero
+}
+
 func (m M) String(key string, defaultVal ...string) string {
 	if val, ok := m[key].(string); ok {
 		return val
 	}
-	return defaultVal[0]
+	return firstOr(defaultVal)
 }
 
 func (m M) Int(key string, defaultVal ...int) int {
 	if val, ok := m[key].(int); ok {
 		return val
 	}
-	return defaultVal[0]
+	return firstOr(defaultVal)
 }
 
 func (m M) Int64(key string, defaultVal ...int64) int64 {
 	if val, ok := m[key].(int64); ok {
 		return val
 	}
-	return defaultVal[0]
+	return firstOr(defaultVal)
 }
 
 func (m M) Bool(key string, defaultVal ...bool) bool {
 	if val, ok := m[key].(bool); ok {
 		return val
 	}
-	return defaultVal[0]
+	return firstOr(defaultVal)
 }
 
 func (m M) Float64(key string, defaultVal ...float64) float64 {
 	if val, ok := m[key].(float64); ok {
 		return val
 	}
-	return defaultVal[0]
+	return firstOr(defaultVal)
 }
 
 func (m M) Duration(key string, defaultVal ...time.Duration) time.Duration {
 	if val, ok := m[key].(time.Duration); ok {
 		return val
 	}
-	return defaultVal[0]
+	return firstOr(defaultVal)
 }
 
 func (m M) Time(key string, defaultVal ...time.Time) time.Time {
 	if val, ok := m[key].(time.Time); ok {
 		return val
 	}
-	return defaultVal[0]
+	return firstOr(defaultVal)
 }
 
 // Lookup returns a value at key, traversing nested M and map[string]any values.

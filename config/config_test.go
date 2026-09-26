@@ -509,3 +509,86 @@ func BenchmarkConcurrentGet(b *testing.B) {
 		}
 	})
 }
+
+// Reading a key that is not there is the ordinary case for optional
+// configuration — a feature the user did not enable. It used to be an
+// index-out-of-range panic, because the variadic default was read as
+// defaultVal[0] without checking one had been passed.
+func TestAccessorsWithoutADefaultReturnZeroRatherThanPanicking(t *testing.T) {
+	empty := M{}
+
+	if got := empty.String("absent"); got != "" {
+		t.Errorf("String() = %q, want the zero value", got)
+	}
+	if got := empty.Int("absent"); got != 0 {
+		t.Errorf("Int() = %d, want 0", got)
+	}
+	if got := empty.Int64("absent"); got != 0 {
+		t.Errorf("Int64() = %d, want 0", got)
+	}
+	if got := empty.Bool("absent"); got {
+		t.Error("Bool() = true, want false")
+	}
+	if got := empty.Float64("absent"); got != 0 {
+		t.Errorf("Float64() = %v, want 0", got)
+	}
+	if got := empty.Duration("absent"); got != 0 {
+		t.Errorf("Duration() = %v, want 0", got)
+	}
+	if got := empty.Time("absent"); !got.IsZero() {
+		t.Errorf("Time() = %v, want the zero time", got)
+	}
+}
+
+// A key holding the wrong type is the same case: the caller asked for a string
+// and there isn't one.
+func TestAccessorsWithoutADefaultTolerateAWrongType(t *testing.T) {
+	m := M{"port": "8080", "debug": 1}
+
+	if got := m.Int("port"); got != 0 {
+		t.Errorf("Int() on a string = %d, want 0", got)
+	}
+	if got := m.Bool("debug"); got {
+		t.Error("Bool() on an int = true, want false")
+	}
+}
+
+// A supplied default still wins over the zero value.
+func TestAccessorsStillHonourASuppliedDefault(t *testing.T) {
+	empty := M{}
+
+	if got := empty.String("absent", "fallback"); got != "fallback" {
+		t.Errorf("String() = %q, want the default", got)
+	}
+	if got := empty.Int("absent", 42); got != 42 {
+		t.Errorf("Int() = %d, want 42", got)
+	}
+	if got := empty.Duration("absent", time.Minute); got != time.Minute {
+		t.Errorf("Duration() = %v, want a minute", got)
+	}
+}
+
+// A present value still wins over both.
+func TestAccessorsPreferThePresentValue(t *testing.T) {
+	m := M{"name": "lemmego", "port": 8080}
+
+	if got := m.String("name", "fallback"); got != "lemmego" {
+		t.Errorf("String() = %q", got)
+	}
+	if got := m.Int("port", 3000); got != 8080 {
+		t.Errorf("Int() = %d", got)
+	}
+}
+
+// A zero stored deliberately is indistinguishable from an absent key through
+// the accessors, which is what Lookup is for.
+func TestLookupSeparatesAStoredZeroFromAnAbsentKey(t *testing.T) {
+	m := M{"workers": 0}
+
+	if _, ok := m.Lookup("workers"); !ok {
+		t.Error("Lookup() did not find a key holding zero")
+	}
+	if _, ok := m.Lookup("absent"); ok {
+		t.Error("Lookup() found a key that is not there")
+	}
+}

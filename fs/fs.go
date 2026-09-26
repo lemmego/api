@@ -56,30 +56,65 @@ func (fm *FileSystem) Disk(diskName ...string) (fsys.FS, error) {
 	if disk, ok := fm.disks[name]; ok {
 		return disk, nil
 	}
-	disk = resolve(name)
+	disk, err := resolve(name)
+	if err != nil {
+		return nil, err
+	}
 	fm.disks[name] = disk
 	return disk, nil
 }
 
-func resolve(name string) fsys.FS {
-	if conf, ok := config.Get("filesystems.disks").(config.M)[name].(config.M); ok {
-		switch conf["driver"] {
-		case "local":
-			return fsys.NewLocalStorage(config.Get(fmt.Sprintf("filesystems.disks.%s.path", name)).(string))
-		case "s3":
-			fs, err := fsys.NewS3Storage(
-				config.Get(fmt.Sprintf("filesystems.disks.%s.bucket", name)).(string),
-				config.Get(fmt.Sprintf("filesystems.disks.%s.region", name)).(string),
-				config.Get(fmt.Sprintf("filesystems.disks.%s.key", name)).(string),
-				config.Get(fmt.Sprintf("filesystems.disks.%s.secret", name)).(string),
-				config.Get(fmt.Sprintf("filesystems.disks.%s.endpoint", name)).(string),
-			)
-			if err != nil {
-				panic(err)
-			}
-			return fs
-		}
+// defaultLocalPath is where a local disk stores files when the configuration
+// does not say. A project with no filesystems configuration still gets a
+// working local disk rather than a panic.
+const defaultLocalPath = "./storage"
+
+// resolve builds the named disk.
+//
+// Every configuration read here is guarded. It previously asserted the disk
+// map and five S3 settings without checking, so an application with no
+// filesystems section — or an S3 disk missing a key — took the process down on
+// the first upload. A disk that cannot be built is now an error the caller can
+// report.
+func resolve(name string) (fsys.FS, error) {
+	disks, _ := config.Get("filesystems.disks").(config.M)
+	conf, _ := disks[name].(config.M)
+
+	// An unconfigured disk falls back to local storage. Returning an error
+	// instead would break the common case of a project that never configured
+	// filesystems and never uploads anything.
+	driver, _ := conf["driver"].(string)
+	if driver == "" {
+		driver = "local"
 	}
 
-	return fsys.NewLocalStorage(config.Get("filesystems.disks.local.path").(string))
+	setting := func(key string) string {
+		value, _ := conf[key].(string)
+		return value
+	}
+
+	switch driver {
+	case "local":
+		path := setting("path")
+		if path == "" {
+			path = defaultLocalPath
+		}
+		return fsys.NewLocalStorage(path), nil
+
+	case "s3":
+		store, err := fsys.NewS3Storage(
+			setting("bucket"),
+			setting("region"),
+			setting("key"),
+			setting("secret"),
+			setting("endpoint"),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("fs: building the %q disk: %w", name, err)
+		}
+		return store, nil
+
+	default:
+		return nil, fmt.Errorf("fs: disk %q has unsupported driver %q (supported: local, s3)", name, driver)
+	}
 }

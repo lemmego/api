@@ -20,36 +20,78 @@ type Provider struct {
 	sess *session.Session
 }
 
+// defaultSessionFiles is where a file-backed session stores its data when the
+// configuration does not say.
+const defaultSessionFiles = "./storage/session"
+
+// Default Redis connection settings, used when the keyvalue configuration is
+// absent. A project scaffolded without Redis has no such section, and
+// SESSION_DRIVER=redis in that project used to panic on the first request that
+// touched the session rather than failing anywhere useful.
+const (
+	defaultRedisHost = "localhost"
+	defaultRedisPort = 6379
+)
+
 func (s *Provider) Provide(a app.App) error {
 	var sess *session.Session
 	cfg := a.Config()
-	sessionDriver := cfg.Get("session.driver")
 	cookie, lifetime := sessionOptions(cfg, a.InProduction())
 
-	if sessionDriver == session.DriverMemory {
+	// An absent driver means an absent session configuration, which is the
+	// default rather than an error: the file store needs nothing but a
+	// directory.
+	sessionDriver, _ := cfg.Get("session.driver").(string)
+	if sessionDriver == "" {
+		sessionDriver = session.DriverFile
+	}
+
+	switch sessionDriver {
+	case session.DriverMemory:
 		sess = session.New(memstore.New(), cookie)
-	}
 
-	if sessionDriver == session.DriverFile {
-		sess = session.New(session.NewFileSession(cfg.Get("session.files").(string)), cookie)
-	}
+	case session.DriverFile:
+		files, ok := cfg.Get("session.files").(string)
+		if !ok || files == "" {
+			files = defaultSessionFiles
+		}
+		sess = session.New(session.NewFileSession(files), cookie)
 
-	if sessionDriver == session.DriverRedis {
+	case session.DriverRedis:
+		host, ok := cfg.Get("keyvalue.connections.redis.host").(string)
+		if !ok || host == "" {
+			host = defaultRedisHost
+		}
+		port, ok := cfg.Get("keyvalue.connections.redis.port").(int)
+		if !ok || port == 0 {
+			port = defaultRedisPort
+		}
+		password, _ := cfg.Get("keyvalue.connections.redis.password").(string)
+		address := fmt.Sprintf("%s:%d", host, port)
+
 		pool := &redis.Pool{
 			MaxIdle: 10,
 			Dial: func() (redis.Conn, error) {
-				conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%d", cfg.Get("keyvalue.connections.redis.host").(string), cfg.Get("keyvalue.connections.redis.port").(int)))
-				if err != nil {
-					return nil, fmt.Errorf("failed to connect to redis: %v", err)
+				var opts []redis.DialOption
+				// The password was configured but never sent, so a session
+				// against an authenticated Redis could not connect.
+				if password != "" {
+					opts = append(opts, redis.DialPassword(password))
 				}
-				return conn, err
+				conn, err := redis.Dial("tcp", address, opts...)
+				if err != nil {
+					return nil, fmt.Errorf("session: connecting to redis at %s: %w", address, err)
+				}
+				return conn, nil
 			},
 		}
 		sess = session.New(redisstore.New(pool), cookie)
+
+	default:
+		return fmt.Errorf("session: unsupported driver %q (supported: %s, %s, %s)",
+			sessionDriver, session.DriverMemory, session.DriverFile, session.DriverRedis)
 	}
-	if sess == nil {
-		return fmt.Errorf("unsupported session driver %q", sessionDriver)
-	}
+
 	sess.Lifetime = lifetime
 	a.AddService(sess)
 
