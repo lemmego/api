@@ -369,6 +369,7 @@ func (a *application) registerCommands() error {
 	rootCmd.AddCommand(publishCmd)
 
 	rootCmd.AddCommand(cmd.MigrateCmd)
+	rootCmd.AddCommand(pathsCmd)
 
 	return rootCmd.Execute()
 }
