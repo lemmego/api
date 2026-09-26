@@ -57,9 +57,19 @@ func Get[T any](a App) T {
 
 // Lookup returns a typed service when it is registered. Unlike Get, it does
 // not panic when an optional service is absent or has an unexpected type.
+//
+// T may be an interface. The lookup keys on the type parameter rather than on
+// a value's dynamic type, which is why it goes through the registry instead of
+// App.Service: a nil interface value carries no type, so reflect.TypeOf would
+// see nothing to key on and every interface lookup would miss.
 func Lookup[T any](a App) (T, bool) {
-	var zero T
-	service := a.Service(zero)
-	value, ok := service.(T)
-	return value, ok
+	return a.Services().Lookup[T]()
+}
+
+// RegisterIfAbsent stores service under T when nothing is registered there
+// yet, and reports whether it did. T may be an interface, which is the point:
+// it is how a package registers an implementation under a shared seam without
+// the consumer having to know which concrete type provided it.
+func RegisterIfAbsent[T any](a App, service T) bool {
+	return a.Services().RegisterIfAbsent[T](service)
 }

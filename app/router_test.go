@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
@@ -234,5 +235,45 @@ func TestRouterUtilMethods(t *testing.T) {
 		if route == nil {
 			t.Errorf("%s route was nil", name)
 		}
+	}
+}
+
+// Router-level routes used to share one backing array for their middleware:
+// addRoute assigned r.beforeMiddleware by reference, and route.UseBefore
+// appended into it. When that shared slice had spare capacity the append
+// wrote in place, so two routes each calling UseBefore silently overwrote
+// each other's middleware.
+//
+// Three separate UseBefore calls are what make the bug reachable: appending
+// one element at a time grows a nil slice to capacity 1, 2, then 4, so at
+// length three there is room for a fourth element and no reallocation to hide
+// the aliasing. Appending all three at once would allocate exactly three and
+// mask it.
+func TestRouterLevelUseBeforeDoesNotLeakBetweenRoutes(t *testing.T) {
+	r := newRouter()
+	pass := func(c Context) error { return c.Next() }
+	r.UseBefore(pass)
+	r.UseBefore(pass)
+	r.UseBefore(pass)
+	if len(r.beforeMiddleware) == cap(r.beforeMiddleware) {
+		t.Fatalf("test setup no longer leaves spare capacity (len %d, cap %d); "+
+			"the aliasing it guards against would be masked by a reallocation",
+			len(r.beforeMiddleware), cap(r.beforeMiddleware))
+	}
+
+	firstOwn := func(c Context) error { return c.Next() }
+	secondOwn := func(c Context) error { return c.Next() }
+	first := r.Get("/first", func(c Context) error { return nil }).UseBefore(firstOwn)
+	second := r.Get("/second", func(c Context) error { return nil }).UseBefore(secondOwn)
+
+	if len(first.BeforeMiddleware) != 4 || len(second.BeforeMiddleware) != 4 {
+		t.Fatalf("middleware counts = %d, %d; want 4 and 4",
+			len(first.BeforeMiddleware), len(second.BeforeMiddleware))
+	}
+	if reflect.ValueOf(first.BeforeMiddleware[3]).Pointer() != reflect.ValueOf(firstOwn).Pointer() {
+		t.Error("the second route's middleware overwrote the first route's")
+	}
+	if reflect.ValueOf(second.BeforeMiddleware[3]).Pointer() != reflect.ValueOf(secondOwn).Pointer() {
+		t.Error("the second route did not keep its own middleware")
 	}
 }

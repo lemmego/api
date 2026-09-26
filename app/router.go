@@ -191,11 +191,15 @@ func (r *httpRouter) Use(middlewares ...HTTPMiddleware) {
 func (r *httpRouter) addRoute(method, pattern string, handlers ...Handler) *route {
 	fullPath := path.Join(r.basePrefix, pattern)
 	route := &route{
-		Method:           method,
-		Path:             fullPath,
-		Handlers:         handlers,
-		BeforeMiddleware: r.beforeMiddleware,
-		AfterMiddleware:  r.afterMiddleware,
+		Method:   method,
+		Path:     fullPath,
+		Handlers: handlers,
+		// Copy rather than alias. route.UseBefore appends to these slices,
+		// and appending to a shared backing array lets two router-level
+		// routes silently overwrite each other's middleware. routeGroup's
+		// addRoute already copies; this is the same fix for the router.
+		BeforeMiddleware: append([]Handler{}, r.beforeMiddleware...),
+		AfterMiddleware:  append([]Handler{}, r.afterMiddleware...),
 		router:           r,
 	}
 	r.routes = append(r.routes, route)

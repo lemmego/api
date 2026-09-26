@@ -39,6 +39,33 @@ func (r *ServiceRegistry) Register[T any](service T) {
 	r.services[typeOfService] = service
 }
 
+// RegisterIfAbsent stores service under T when nothing is registered there
+// yet, and reports whether it did.
+//
+// Unlike Register it never panics on a second registration. That is what a
+// seam registered by whichever of several interchangeable providers happens
+// to run first needs: two connectors in one application is a legitimate
+// wiring, and it should resolve deterministically rather than fail to boot.
+// The check and the write are under one lock, so concurrent registration
+// cannot produce two winners.
+func (r *ServiceRegistry) RegisterIfAbsent[T any](service T) bool {
+	typeOfService := reflect.TypeFor[T]()
+	serviceType := reflect.TypeOf(service)
+	if serviceType == nil {
+		panic("service cannot be nil")
+	}
+	if !serviceType.AssignableTo(typeOfService) {
+		panic("service does not implement registered type")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.services[typeOfService]; ok {
+		return false
+	}
+	r.services[typeOfService] = service
+	return true
+}
+
 // RegisterValue preserves concrete-type registration for dynamic callers.
 func (r *ServiceRegistry) RegisterValue(service any) {
 	if service == nil {

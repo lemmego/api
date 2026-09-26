@@ -107,7 +107,10 @@ type AppCore interface {
 	// AddService registers a service instance in the service container
 	AddService(service any)
 
-	// Service retrieves a service instance from the service container by type
+	// Service retrieves a service instance from the service container by the
+	// dynamic type of the argument, so it resolves concrete types only: a nil
+	// interface carries no type to key on. Use Services().Lookup[T]() (or the
+	// package-level Lookup[T]) when T is an interface.
 	Service(service any) any
 
 	// Services returns the typed application service registry.

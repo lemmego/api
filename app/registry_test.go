@@ -178,3 +178,29 @@ func TestApplicationExposesServiceRegistry(t *testing.T) {
 		t.Fatalf("application service lookup = %v, %v", service, ok)
 	}
 }
+
+func TestRegisterIfAbsentIsFirstWins(t *testing.T) {
+	sr := newServiceRegistry()
+
+	first := &testServiceImplementation{value: "first"}
+	if !sr.RegisterIfAbsent[testServiceContract](first) {
+		t.Fatal("the first registration should report that it stored the service")
+	}
+	if sr.RegisterIfAbsent[testServiceContract](&testServiceImplementation{value: "second"}) {
+		t.Fatal("a second registration should report that it stored nothing")
+	}
+
+	service, ok := sr.Lookup[testServiceContract]()
+	if !ok || service.Value() != "first" {
+		t.Fatalf("lookup after a losing registration = %v, %v; want the first value", service, ok)
+	}
+}
+
+func TestRegisterIfAbsentRejectsNil(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("registering a nil service should panic rather than store an unusable value")
+		}
+	}()
+	newServiceRegistry().RegisterIfAbsent[testServiceContract](nil)
+}
