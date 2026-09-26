@@ -354,7 +354,14 @@ func (a *application) WithErrMap(errMap ErrMap) Bootstrapper {
 	return a
 }
 
-func (a *application) registerCommands() {
+// registerCommands runs the CLI and reports whether the command failed.
+//
+// It returns the error rather than panicking on it. Cobra has already printed
+// the message and the usage by this point, so a panic would print it a second
+// time under a goroutine dump — which makes a mistyped command or an ordinary
+// expected failure look like the framework crashed. Returning it also lets the
+// caller shut down cleanly before exiting.
+func (a *application) registerCommands() error {
 	for _, command := range a.commands {
 		rootCmd.AddCommand(command(a))
 	}
@@ -363,9 +370,7 @@ func (a *application) registerCommands() {
 
 	rootCmd.AddCommand(cmd.MigrateCmd)
 
-	if err := rootCmd.Execute(); err != nil {
-		panic(err)
-	}
+	return rootCmd.Execute()
 }
 
 func (a *application) registerProviders() {
@@ -568,9 +573,15 @@ func (a *application) Run() {
 
 	if a.RunningInConsole() {
 		a.Dispatch(CommandsRegistering)
-		a.registerCommands()
+		err := a.registerCommands()
 		a.Dispatch(CommandsRegistered)
+
+		// Shut down either way, so a failed command still closes the
+		// connections a successful one would have.
 		a.shutDown()
+		if err != nil {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
