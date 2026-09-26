@@ -80,14 +80,30 @@ func (t *Template) Render(w io.Writer) error {
 	if !ok {
 		return fmt.Errorf("template %s not found in cache", t.File)
 	}
-	if t.funcMap != nil {
-		var err error
-		tmpl, err = tmpl.Clone()
-		if err != nil {
-			return fmt.Errorf("clone template %s: %w", t.File, err)
+	// csrf is registered at parse time as a stub returning nothing, because a
+	// template calling an unregistered function will not parse. It has to be
+	// rebound here with the request's actual token, and until it was, {{ csrf }}
+	// rendered an empty string — a form using it posted no _token and was
+	// rejected with 419 at submit time, with nothing on the page to suggest
+	// why. A helper that silently produces nothing is worse than no helper.
+	perRender := template.FuncMap{"csrf": func() template.HTML { return "" }}
+	if t.ctx != nil {
+		if token, ok := t.ctx.Get(csrfTokenKey).(string); ok && token != "" {
+			field := template.HTML(`<input type="hidden" name="` + csrfTokenKey +
+				`" value="` + template.HTMLEscapeString(token) + `">`)
+			perRender["csrf"] = func() template.HTML { return field }
 		}
-		tmpl = tmpl.Funcs(t.funcMap)
 	}
+	for name, fn := range t.funcMap {
+		perRender[name] = fn
+	}
+
+	var err error
+	tmpl, err = tmpl.Clone()
+	if err != nil {
+		return fmt.Errorf("clone template %s: %w", t.File, err)
+	}
+	tmpl = tmpl.Funcs(perRender)
 	vErrs := shared.ValidationErrors{}
 
 	if t.ctx != nil {

@@ -179,3 +179,45 @@ func TestRenderDoesNotMutateDataWithTheCSRFToken(t *testing.T) {
 		t.Fatal("render added _token to caller data")
 	}
 }
+
+// csrf is registered at parse time as a stub so a template calling it will
+// parse, and has to be rebound per render with the request's real token.
+// Until it was, {{ csrf }} rendered an empty string: a form using it posted
+// no _token and was rejected with 419 at submit, with nothing on the page to
+// suggest why.
+func TestCSRFHelperRendersTheHiddenField(t *testing.T) {
+	setTemplateCache(t, template.Must(template.New("page.page.gohtml").
+		Funcs(template.FuncMap{"csrf": func() template.HTML { return "" }}).
+		Parse(`<form method="post">{{ csrf }}</form>`)))
+
+	ctx := tokenContext{values: map[string]any{"_token": "tok3n-value"}}
+
+	var out strings.Builder
+	if err := NewTemplate(ctx, "page.page.gohtml").Render(&out); err != nil {
+		t.Fatal(err)
+	}
+
+	page := out.String()
+	if !strings.Contains(page, `name="_token"`) {
+		t.Fatalf("csrf rendered no hidden field: %s", page)
+	}
+	if !strings.Contains(page, `value="tok3n-value"`) {
+		t.Errorf("csrf rendered the wrong token: %s", page)
+	}
+}
+
+// With no token on the context there is nothing to emit, and the template
+// must still render rather than failing.
+func TestCSRFHelperIsEmptyWithoutAToken(t *testing.T) {
+	setTemplateCache(t, template.Must(template.New("page.page.gohtml").
+		Funcs(template.FuncMap{"csrf": func() template.HTML { return "" }}).
+		Parse(`<form method="post">{{ csrf }}</form>`)))
+
+	var out strings.Builder
+	if err := NewTemplate(nil, "page.page.gohtml").Render(&out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "_token") {
+		t.Errorf("a field was rendered with no token available: %s", out.String())
+	}
+}
