@@ -206,6 +206,24 @@ type ctx struct {
 	index    int
 }
 
+// NewContext wraps a raw request so code written against Context can run
+// inside a plain http.Handler.
+//
+// Almost nothing should need this: a handler registered through the router
+// already receives a Context. It exists for the case where a package mounts a
+// third-party http.Handler on the router — a management dashboard, an
+// embedded admin UI — and needs to run a framework concern such as
+// authentication in front of it. Without it, ctx is unexported and such a
+// handler is cut off from auth, sessions and the container entirely.
+//
+// The returned Context has no handler chain, so Next is a no-op that returns
+// nil. Note that Set rebinds the underlying request: pass c.Request() on to
+// the wrapped handler, not the original, or values written by a middleware
+// are lost.
+func NewContext(a App, w http.ResponseWriter, r *http.Request) Context {
+	return &ctx{app: a, request: r, writer: w, index: -1}
+}
+
 func (c *ctx) Write(p []byte) (n int, err error) {
 	return c.writer.Write(p)
 }
