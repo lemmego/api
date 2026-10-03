@@ -74,6 +74,19 @@ type Bootstrapper interface {
 
 	// Run starts the application, either as a web server or CLI command processor
 	Run()
+
+	// Handler boots the application and returns the http.Handler that Run
+	// would serve, without binding a port.
+	//
+	// It exists so a test can drive a fully booted application through
+	// httptest: providers registered, middleware and routes installed, the
+	// session wrapper in place. Run is this plus a listener and signal
+	// handling, so the handler under test is the handler that ships.
+	//
+	// It is not for production serving — Run owns the server's timeouts and
+	// graceful shutdown. Calling it twice re-registers routes on the same
+	// mux, which panics on a duplicate pattern, so call it once.
+	Handler() http.Handler
 }
 
 // AppCore defines the core functionality available to the application.
@@ -475,18 +488,15 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 			return
 		}
 
-		sess := Get[*session.Session](app)
-		//sess := session.Get(app)
-		//if err != nil {
-		//	slog.Error(err.Error())
-		//	http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		//	return
-		//}
-
-		token := sess.Token(r.Context())
-		if token != "" {
-			r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
-			slog.Debug("Current session ID: ", "sessionID", token)
+		// Lookup, not Get: an application without session.Provider is a valid
+		// configuration — a pure JSON API has no cookie jar — and Get panics
+		// on an unregistered service, so this took the process down on every
+		// single request rather than serving the API it was configured for.
+		if sess, ok := Lookup[*session.Session](app); ok && sess != nil {
+			if token := sess.Token(r.Context()); token != "" {
+				r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
+				slog.Debug("Current session ID: ", "sessionID", token)
+			}
 		}
 
 		allHandlers := append(append([]Handler{}, route.BeforeMiddleware...), route.Handlers...)
@@ -551,6 +561,49 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 	return fn
 }
 
+// serveHandler installs middleware and routes and returns the handler stack.
+// Split out of Run so Handler can reach it without starting a listener.
+func (a *application) serveHandler() http.Handler {
+	a.Dispatch(MiddlewareRegistering)
+	a.registerMiddlewares()
+	a.Dispatch(MiddlewareRegistered)
+
+	a.Dispatch(RoutesRegistering)
+	a.registerRoutes()
+	a.Dispatch(RoutesRegistered)
+
+	// An application without session.Provider has no session to load, and
+	// that is a legitimate configuration — a pure JSON API has no cookie jar.
+	// Session() resolves through Get, which panics on an unregistered
+	// service, so this used to take the process down at boot with "service
+	// *session.Session is not registered" rather than serving the API it was
+	// configured to serve.
+	if sess, ok := Lookup[*session.Session](a); ok && sess != nil {
+		return sess.LoadAndSave(a.router)
+	}
+	return a.router
+}
+
+// Handler boots the application and returns the handler Run would serve,
+// without binding a port. See the Bootstrapper interface for the contract.
+func (a *application) Handler() http.Handler {
+	if a.config == nil {
+		panic("main configuration is missing")
+	}
+	if a.config.Get("app") == nil {
+		panic("app configuration is missing")
+	}
+
+	a.Dispatch(ServicesRegistering)
+	a.registerProviders()
+	a.Dispatch(ServicesRegistered)
+
+	// Deliberately not publishing here. publish writes files into the project
+	// directory, which a test must not do as a side effect of booting.
+
+	return a.serveHandler()
+}
+
 func (a *application) Run() {
 	// Check if the main config is nil
 	if a.config == nil {
@@ -589,18 +642,9 @@ func (a *application) Run() {
 		os.Exit(0)
 	}
 
-	// Register middlewares then routes
-	a.Dispatch(MiddlewareRegistering)
-	a.registerMiddlewares()
-	a.Dispatch(MiddlewareRegistered)
-
-	a.Dispatch(RoutesRegistering)
-	a.registerRoutes()
-	a.Dispatch(RoutesRegistered)
-
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", a.config.Get("app.port", 3000)),
-		Handler:           a.Session().LoadAndSave(a.router),
+		Handler:           a.serveHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
