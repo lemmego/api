@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,11 +20,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lemmego/api/shared"
+
+	// image.DecodeConfig dispatches on registered formats, and registration
+	// happens in a decoder's init. Without these, every call returns
+	// image.ErrFormat and an Image rule rejects every image — which is worse
+	// than having no rule, because the form looks validated.
+	//
+	// These three cover what a browser's file picker produces. WebP and AVIF
+	// are not in the standard library; a project that accepts them needs
+	// golang.org/x/image and can register it itself, since the registry is
+	// process-global.
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 )
 
 type Validator struct {
 	Errors          shared.ValidationErrors
 	activeURLConfig activeURLConfig
+	// err holds the first failure from a rule that could not run, as opposed
+	// to a value that was invalid. See Check and Err.
+	err error
 }
 
 func NewValidator() *Validator {
@@ -695,3 +712,222 @@ func (f *vField) Custom(validateFunc func(v interface{}) (bool, string)) *vField
 }
 
 // Extension
+
+// Check runs a rule that can itself fail to run.
+//
+// Custom cannot express the difference between "this value is invalid" and "I
+// could not tell". For a rule backed by a database that difference is the
+// whole thing: if the lookup fails and the rule reports invalid, the person
+// signing up is told their handle is taken when in fact the database is
+// unreachable — and they will pick a different handle, permanently, over a
+// transient outage.
+//
+// So fn returns (ok, message, err). An err records a message and is also kept
+// on the Validator, where Err reports it, so a handler can answer 503 instead
+// of 422.
+func (f *vField) Check(fn func(value any) (bool, string, error)) *vField {
+	ok, message, err := fn(f.value)
+	if err != nil {
+		f.vee.setErr(err)
+		if message == "" {
+			message = "This field could not be validated"
+		}
+		f.vee.AddError(f.name, message)
+		return f
+	}
+	if !ok {
+		f.vee.AddError(f.name, message)
+	}
+	return f
+}
+
+// setErr records the first rule failure that was not the value's fault.
+func (v *Validator) setErr(err error) {
+	if v.err == nil {
+		v.err = err
+	}
+}
+
+// Err returns the first error from a rule that could not run — a failed
+// database lookup, say — or nil.
+//
+// It is separate from Validate because the two mean different things to the
+// caller: Validate's error is the user's to fix, and this one is not. A
+// handler that distinguishes them answers 422 for the first and 503 for the
+// second.
+func (v *Validator) Err() error { return v.err }
+
+// ---------------------------------------------------------------------------
+// Upload rules
+//
+// Dimensions and MimeTypes above accept only a filesystem path string: they
+// begin with a type assertion to string and os.Open it. An uploaded file
+// arrives as *multipart.FileHeader, so those rules silently do nothing — the
+// assertion fails and the field is returned unchanged. A form that looked
+// validated was not, which is worse than one that obviously is not.
+//
+// The rules below take the header. They read only what they need and always
+// rewind, so a later rule and the handler still see the whole file.
+
+// MaxSize fails when an uploaded file is larger than max bytes.
+//
+// Note that the multipart parser has already buffered the file by the time a
+// rule sees it, so this bounds what gets stored, not what gets received. Use
+// http.MaxBytesReader to bound the request itself.
+func (f *vField) MaxSize(max int64) *vField {
+	header, ok := f.uploadHeader()
+	if !ok {
+		return f
+	}
+	if header.Size > max {
+		f.vee.AddError(f.name, fmt.Sprintf("This file is larger than %s", humanBytes(max)))
+	}
+	return f
+}
+
+// MinSize fails when an uploaded file is smaller than min bytes. A
+// zero-length upload is usually a failed selection rather than a choice.
+func (f *vField) MinSize(min int64) *vField {
+	header, ok := f.uploadHeader()
+	if !ok {
+		return f
+	}
+	if header.Size < min {
+		f.vee.AddError(f.name, fmt.Sprintf("This file is smaller than %s", humanBytes(min)))
+	}
+	return f
+}
+
+// FileTypes fails unless an uploaded file's content is one of the given media
+// types, for example "image/png".
+//
+// It sniffs the first 512 bytes rather than trusting the browser's
+// Content-Type or the filename. Both are supplied by the client: a .png
+// extension on an HTML file is how a stored upload becomes a cross-site
+// scripting vector when it is later served from the same origin.
+func (f *vField) FileTypes(types ...string) *vField {
+	header, ok := f.uploadHeader()
+	if !ok {
+		return f
+	}
+	detected, err := sniffUpload(header)
+	if err != nil {
+		f.vee.AddError(f.name, "This file could not be read")
+		return f
+	}
+	for _, allowed := range types {
+		// DetectContentType appends parameters, as in "text/plain;
+		// charset=utf-8", so compare the type and ignore them.
+		if strings.EqualFold(mediaType(detected), mediaType(allowed)) {
+			return f
+		}
+	}
+	f.vee.AddError(f.name, "This file must be one of: "+strings.Join(types, ", "))
+	return f
+}
+
+// Image fails unless the upload is a decodable image, and is the rule an
+// avatar field wants: it proves the bytes are an image rather than something
+// named like one.
+func (f *vField) Image() *vField {
+	header, ok := f.uploadHeader()
+	if !ok {
+		return f
+	}
+	file, err := header.Open()
+	if err != nil {
+		f.vee.AddError(f.name, "This file could not be read")
+		return f
+	}
+	defer file.Close()
+
+	if _, _, err := image.DecodeConfig(file); err != nil {
+		f.vee.AddError(f.name, "This file is not an image")
+	}
+	return f
+}
+
+// ImageDimensions fails unless a decodable image's size is within bounds. A
+// zero bound is ignored, so one side can be constrained alone.
+func (f *vField) ImageDimensions(minWidth, minHeight, maxWidth, maxHeight int) *vField {
+	header, ok := f.uploadHeader()
+	if !ok {
+		return f
+	}
+	file, err := header.Open()
+	if err != nil {
+		f.vee.AddError(f.name, "This file could not be read")
+		return f
+	}
+	defer file.Close()
+
+	config, _, err := image.DecodeConfig(file)
+	if err != nil {
+		f.vee.AddError(f.name, "This file is not an image")
+		return f
+	}
+	switch {
+	case minWidth > 0 && config.Width < minWidth,
+		minHeight > 0 && config.Height < minHeight:
+		f.vee.AddError(f.name, fmt.Sprintf("This image must be at least %dx%d pixels", minWidth, minHeight))
+	case maxWidth > 0 && config.Width > maxWidth,
+		maxHeight > 0 && config.Height > maxHeight:
+		f.vee.AddError(f.name, fmt.Sprintf("This image must be at most %dx%d pixels", maxWidth, maxHeight))
+	}
+	return f
+}
+
+// uploadHeader returns the field's value as an upload.
+//
+// A field that is not an upload is left alone rather than failed: the rules
+// above are chained after Required, which is what decides whether an absent
+// file is acceptable. Failing here as well would report two errors for one
+// missing field.
+func (f *vField) uploadHeader() (*multipart.FileHeader, bool) {
+	switch value := f.value.(type) {
+	case *multipart.FileHeader:
+		return value, value != nil
+	case multipart.FileHeader:
+		return &value, true
+	case []*multipart.FileHeader:
+		if len(value) > 0 {
+			return value[0], value[0] != nil
+		}
+	}
+	return nil, false
+}
+
+// sniffUpload reads the first 512 bytes and rewinds, so a later rule and the
+// handler still see the whole file.
+func sniffUpload(header *multipart.FileHeader) (string, error) {
+	file, err := header.Open()
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	buf := make([]byte, 512)
+	n, err := file.Read(buf)
+	if err != nil && n == 0 {
+		return "", err
+	}
+	return http.DetectContentType(buf[:n]), nil
+}
+
+func mediaType(contentType string) string {
+	if idx := strings.IndexByte(contentType, ';'); idx >= 0 {
+		return strings.TrimSpace(contentType[:idx])
+	}
+	return strings.TrimSpace(contentType)
+}
+
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.0fMB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0fKB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
+}
