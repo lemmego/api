@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	_ "github.com/joho/godotenv/autoload"
 )
 
 // M is a type alias for a map of string to any that provides
