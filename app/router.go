@@ -5,10 +5,12 @@ package app
 import (
 	"net/http"
 	"path"
+	"reflect"
 	"slices"
 
 	"github.com/ggicci/httpin"
 	"github.com/ggicci/httpin/core"
+	"github.com/lemmego/api/req"
 )
 
 const HTTPInKey = "input"
@@ -225,6 +227,19 @@ func Input(inputStruct any, opts ...core.Option) Middleware {
 
 	return func(next Handler) Handler {
 		return func(ctx Context) error {
+			// A form body against a struct tagged `form:` is decoded by req,
+			// which reads that tag; httpin reads only its own `in:` tag and
+			// would bind an empty struct without reporting anything.
+			if req.HasFormTags(inputStruct) && req.IsFormRequest(ctx.Request()) {
+				decoded := reflect.New(reflect.TypeOf(inputStruct).Elem()).Interface()
+				if err := req.DecodeForm(ctx.Request(), decoded); err != nil {
+					co.GetErrorHandler()(ctx.ResponseWriter(), ctx.Request(), err)
+					return nil
+				}
+				ctx.Set(HTTPInKey, decoded)
+				return next(ctx)
+			}
+
 			input, err := co.Decode(ctx.Request())
 			if err != nil {
 				co.GetErrorHandler()(ctx.ResponseWriter(), ctx.Request(), err)

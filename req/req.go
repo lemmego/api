@@ -236,6 +236,12 @@ func ParseInput(rr RequestResponder, inputStruct any, opts ...core.Option) error
 		}
 		return nil
 	}
+	// A form body against a struct tagged `form:` is decoded here. httpin reads
+	// only its own `in:` tag, so such a struct used to bind nothing at all and
+	// every field came back empty.
+	if IsFormRequest(rr.Request()) && HasFormTags(inputStruct) {
+		return DecodeForm(rr.Request(), inputStruct)
+	}
 	co, err := httpin.New(inputStruct, opts...)
 
 	if err != nil {
@@ -255,6 +261,13 @@ func ParseInput(rr RequestResponder, inputStruct any, opts ...core.Option) error
 func In(c Context, inputStruct any, opts ...core.Option) error {
 	if HasJSON(c.Request()) {
 		if err := DecodeJSONBody(c.ResponseWriter(), c.Request(), inputStruct); err != nil {
+			return err
+		}
+		c.Set(InKey, inputStruct)
+		return nil
+	}
+	if IsFormRequest(c.Request()) && HasFormTags(inputStruct) {
+		if err := DecodeForm(c.Request(), inputStruct); err != nil {
 			return err
 		}
 		c.Set(InKey, inputStruct)
