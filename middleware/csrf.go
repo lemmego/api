@@ -23,8 +23,19 @@ import (
 
 // CSRFOpts holds configuration options for CSRF middleware.
 type CSRFOpts struct {
-	// ExcludePatterns contains regex patterns for routes that should skip CSRF verification.
-	// For example: []string{"/api/.*", "/webhooks/.*"}
+	// ExcludePatterns are regex patterns for paths that skip CSRF
+	// verification. For example: []string{"/api/.*", "/webhooks/stripe"}
+	//
+	// Each pattern is matched from the start of the path, so a pattern
+	// without a trailing $ is a prefix: "/api/.*" and "/api/" both exclude
+	// everything under /api/, and "/login" would also exclude
+	// "/login-with-github". End a pattern with $ to match one exact path.
+	//
+	// The anchoring is not a convenience. An unanchored match means the
+	// pattern is tested as "contains", so "/api/.*" would exclude
+	// "/jobs/cool-startup/api/delete" — a state-changing route that is not
+	// under /api/ at all, with CSRF silently off. An exclusion list that
+	// excludes more than it says is a hole nobody reading it would see.
 	ExcludePatterns []string
 }
 
@@ -104,9 +115,12 @@ func shouldExcludePath(path string, patterns []string) bool {
 		regex, ok := compiledRegexCache[pattern]
 		regexCacheMutex.RUnlock()
 		if !ok {
-			// Compile and cache the regex
+			// Anchored at the start, with the pattern in a non-capturing
+			// group so that a top-level alternation inside it still binds
+			// the way its author wrote it: `\A(?:a|b)` and not `\Aa|b`,
+			// which would anchor only the first branch.
 			var err error
-			regex, err = regexp.Compile(pattern)
+			regex, err = regexp.Compile(`\A(?:` + pattern + `)`)
 			if err != nil {
 				slog.Warn("Invalid CSRF exclusion pattern", "pattern", pattern, "error", err)
 				continue
