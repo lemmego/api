@@ -172,13 +172,22 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 		Checks:    results,
 	}
 
-	// Add version and environment if available
+	// Add version and environment if available.
+	//
+	// The configuration is checked for nil as well as the application.
+	// App.Config() returns an interface, and an application built without
+	// one returns a nil interface — on which Get panics, inside Check and so
+	// outside the protection runCheck gives a failing check. A monitoring
+	// endpoint that can take the process down is a worse liability than no
+	// monitoring endpoint.
 	if h.app != nil {
-		if name := h.app.Config().Get("app.name"); name != nil {
-			healthStatus.Version = fmt.Sprintf("%v", name)
-		}
-		if env := h.app.Config().Get("app.env"); env != nil {
-			healthStatus.Env = fmt.Sprintf("%v", env)
+		if cfg := h.app.Config(); cfg != nil {
+			if name := cfg.Get("app.name"); name != nil {
+				healthStatus.Version = fmt.Sprintf("%v", name)
+			}
+			if env := cfg.Get("app.env"); env != nil {
+				healthStatus.Env = fmt.Sprintf("%v", env)
+			}
 		}
 	}
 
@@ -384,9 +393,22 @@ func (h *HealthChecker) RegisterDefaultChecks() {
 	})
 }
 
-// GetHealthChecker returns the health checker for the application
+// GetHealthChecker returns the application's health checker.
+//
+// One per application, created on first use. It built a new one per call
+// before, which made the whole subsystem inert in a way nothing would report:
+// a provider calling RegisterCheck wrote into a throwaway object, and the
+// HTTP handler served a different, empty one — so /health answered "healthy"
+// having checked nothing at all, which is worse than not having the endpoint.
+//
+// sync.Once rather than a mutex around a nil test, because the checker holds
+// the registered checks and two callers racing to create it would each get a
+// different map.
 func (a *application) GetHealthChecker() *HealthChecker {
-	return NewHealthChecker(a)
+	a.healthOnce.Do(func() {
+		a.healthChecker = NewHealthChecker(a)
+	})
+	return a.healthChecker
 }
 
 // runCheck calls a health check and turns a panic into a failed check.

@@ -129,6 +129,12 @@ type AppCore interface {
 	// Services returns the typed application service registry.
 	Services() *ServiceRegistry
 
+	// GetHealthChecker returns the application's health checker.
+	//
+	// One per application, so a check registered by a provider at boot is
+	// the same check the HTTP handler runs. See health.go.
+	GetHealthChecker() *HealthChecker
+
 	// EventEmitter provides event publishing and subscription capabilities
 	EventEmitter
 }
@@ -165,6 +171,10 @@ type application struct {
 	providers       []Provider       // Service providers for dependency injection
 	serviceRegistry *ServiceRegistry // Container for registered services
 	eventRegistry   *eventRegistry   // Event system for application events
+
+	// healthChecker is created once, lazily. See GetHealthChecker.
+	healthChecker *HealthChecker
+	healthOnce    sync.Once
 
 	// Graceful shutdown tracking
 	activeRequests sync.WaitGroup // Tracks active HTTP requests
