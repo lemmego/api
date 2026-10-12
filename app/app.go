@@ -625,10 +625,15 @@ func (a *application) Run() {
 		panic("app configuration is missing")
 	}
 
-	// Suppress info logs in console mode before providers run
-	if a.RunningInConsole() {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	}
+	// Quietening a command's logs is logger.Provider's job, not this one's.
+	//
+	// This used to replace the default logger with a warn-level text handler
+	// when the process was a CLI command, which did suppress info chatter and
+	// also discarded whatever the application had configured — a second owner
+	// of slog.SetDefault, deciding by an ordering nobody controlled. The
+	// provider reads RunningInConsole itself and raises only the console,
+	// leaving the file at full level, so a command that fails overnight still
+	// leaves a record.
 
 	// Register providers — this also collects commands, routes, middlewares, etc.
 	a.Dispatch(ServicesRegistering)
