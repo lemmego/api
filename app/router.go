@@ -8,8 +8,6 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/ggicci/httpin"
-	"github.com/ggicci/httpin/core"
 	"github.com/lemmego/api/req"
 )
 
@@ -218,35 +216,22 @@ func (r *route) UseAfter(handlers ...Handler) *route {
 	return r
 }
 
-func Input(inputStruct any, opts ...core.Option) Middleware {
-	co, err := httpin.New(inputStruct, opts...)
-
-	if err != nil {
-		panic(err)
-	}
-
+// Input binds the request onto a copy of inputStruct and stashes it on the
+// context, for a route that wants its input bound before the handler runs.
+// Input binds the request onto a fresh copy of inputStruct and stashes it on
+// the context, for a route that wants its input bound before the handler runs.
+//
+// A fresh copy per request, never inputStruct itself: the value passed here
+// is captured once when the route is declared, so writing into it would share
+// one struct between every concurrent request on that route.
+func Input(inputStruct any) Middleware {
 	return func(next Handler) Handler {
 		return func(ctx Context) error {
-			// A form body against a struct tagged `form:` is decoded by req,
-			// which reads that tag; httpin reads only its own `in:` tag and
-			// would bind an empty struct without reporting anything.
-			if req.HasFormTags(inputStruct) && req.IsFormRequest(ctx.Request()) {
-				decoded := reflect.New(reflect.TypeOf(inputStruct).Elem()).Interface()
-				if err := req.DecodeForm(ctx.Request(), decoded); err != nil {
-					co.GetErrorHandler()(ctx.ResponseWriter(), ctx.Request(), err)
-					return nil
-				}
-				ctx.Set(HTTPInKey, decoded)
-				return next(ctx)
+			decoded := reflect.New(reflect.TypeOf(inputStruct).Elem()).Interface()
+			if err := req.ParseInput(ctx, decoded); err != nil {
+				return err
 			}
-
-			input, err := co.Decode(ctx.Request())
-			if err != nil {
-				co.GetErrorHandler()(ctx.ResponseWriter(), ctx.Request(), err)
-				return nil
-			}
-
-			ctx.Set(HTTPInKey, input)
+			ctx.Set(HTTPInKey, decoded)
 			return next(ctx)
 		}
 	}

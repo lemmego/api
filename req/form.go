@@ -7,17 +7,55 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // maxMultipartMemory is what is held in memory before a part spills to disk.
 const maxMultipartMemory = 32 << 20 // 32 MiB
 
-// HasFormTags reports whether a struct declares any `form:` tags.
+// HasFormTags reports whether a struct declares any field this package can
+// bind, under either tag vocabulary.
 //
-// It is the signal that decides which decoder runs: a struct tagged for httpin
-// (`in:"form=name"`) keeps using httpin, and one tagged `form:"name"` — which is
-// what lemmego's own generators emit — is decoded here. Without this check,
-// adding a second decoder would change the behaviour of every existing input.
+// It no longer decides which decoder runs — the Content-Type does — and is
+// kept because a caller may reasonably want to know whether a struct is
+// bindable at all before handing it a request.
+// FieldName returns the form field a struct field binds to, from either tag
+// vocabulary, and whether it binds at all.
+//
+// Two vocabularies exist because two binders did: `form:"name"` is what this
+// package reads and what `lemmego g input` used to generate; `in:"form=name"`
+// is httpin's, which the generator emitted for a while. Supporting both here
+// is what let httpin be removed without a sweep of every project — and the
+// reason it had to go is that the two binders disagreed in ways nobody could
+// see from a struct: on which array shapes bind, on whether a checkbox's
+// `on` is true, and on whether files bind at all. A single struct tag decided
+// which set of answers an input got.
+//
+// `-` means "never bind this", as it does for encoding/json.
+func FieldName(field reflect.StructField) (string, bool) {
+	if tag := field.Tag.Get("form"); tag != "" {
+		name := strings.Split(tag, ",")[0]
+		if name == "" || name == "-" {
+			return "", false
+		}
+		return name, true
+	}
+	// httpin's form directive: `in:"form=name"`, possibly among others
+	// separated by ";", and possibly with alternatives separated by ",".
+	for _, directive := range strings.Split(field.Tag.Get("in"), ";") {
+		directive = strings.TrimSpace(directive)
+		if !strings.HasPrefix(directive, "form=") {
+			continue
+		}
+		name := strings.Split(strings.TrimPrefix(directive, "form="), ",")[0]
+		if name == "" || name == "-" {
+			return "", false
+		}
+		return name, true
+	}
+	return "", false
+}
+
 func HasFormTags(inputStruct any) bool {
 	value := reflect.ValueOf(inputStruct)
 	for value.Kind() == reflect.Ptr {
@@ -32,7 +70,7 @@ func HasFormTags(inputStruct any) bool {
 
 	t := value.Type()
 	for i := 0; i < t.NumField(); i++ {
-		if tag := t.Field(i).Tag.Get("form"); tag != "" && tag != "-" {
+		if _, ok := FieldName(t.Field(i)); ok {
 			return true
 		}
 	}
@@ -42,16 +80,13 @@ func HasFormTags(inputStruct any) bool {
 // DecodeForm binds a URL-encoded or multipart form onto a struct by its `form:`
 // tags.
 //
-// This exists because httpin — which handles every other binding path — reads
-// only its own `in:` tag. A struct tagged `form:"name"`, which is what
-// `lemmego g input` generates, bound nothing at all: a plain HTML form arrived
-// empty and validation reported "this field is required" for every field the
-// person had filled in. JSON requests were unaffected, which is why it survived
-// so long: an Inertia app posts JSON.
+// It reads `form:"name"` and httpin's `in:"form=name"` alike — see FieldName
+// — so an input written for either convention binds the same way.
 //
-// Arrays are accepted in both the shapes a browser and an HTTP client produce —
-// repeated keys (`topic_ids=1&topic_ids=2`) and indexed keys
-// (`topic_ids[0]=1&topic_ids[1]=2`).
+// Arrays are accepted in all three shapes a browser or an HTTP client
+// produces: repeated keys (`topic_ids=1&topic_ids=2`), indexed keys
+// (`topic_ids[0]=1&topic_ids[1]=2`) and bracketed keys (`topic_ids[]=1`).
+// Files too, under the same three.
 func DecodeForm(r *http.Request, inputStruct any) error {
 	values, err := formValues(r)
 	if err != nil {
@@ -70,8 +105,8 @@ func DecodeForm(r *http.Request, inputStruct any) error {
 	t := target.Type()
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		name := strings.Split(field.Tag.Get("form"), ",")[0]
-		if name == "" || name == "-" || !target.Field(i).CanSet() {
+		name, binds := FieldName(field)
+		if !binds || !target.Field(i).CanSet() {
 			continue
 		}
 		// A file is not a form value: it lives in MultipartForm.File, not in
@@ -260,6 +295,21 @@ func setScalar(field reflect.Value, raw string) error {
 		return setScalar(field.Elem(), raw)
 	}
 
+	// Before the Kind switch: a time.Time is a struct, and the generic struct
+	// case cannot do anything useful with one.
+	if field.Type() == reflect.TypeOf(time.Time{}) {
+		if raw == "" {
+			field.Set(reflect.ValueOf(time.Time{}))
+			return nil
+		}
+		parsed, err := parseTime(raw)
+		if err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(parsed))
+		return nil
+	}
+
 	switch field.Kind() {
 	case reflect.String:
 		field.SetString(raw)
@@ -310,12 +360,38 @@ func setScalar(field reflect.Value, raw string) error {
 		}
 		field.SetFloat(parsed)
 	default:
-		// Anything else is left alone rather than guessed at. A struct field
-		// that needs custom parsing is better served by reading the form in the
-		// handler than by this function inventing a convention.
-		return nil
+		// Anything else is reported rather than skipped. It used to return
+		// nil, so a field of a type this function did not know — a time.Time,
+		// say — bound to its zero value with nothing said: the request
+		// succeeded and the date was 0001-01-01. A binder that cannot bind a
+		// field has to say so.
+		return fmt.Errorf("cannot bind %q into a %s", raw, field.Type())
 	}
 	return nil
+}
+
+// timeFormats are what a form can carry a time in.
+//
+// RFC3339 first, because that is what an API client and our own JavaScript
+// send. Then the two shapes HTML's own inputs produce, which carry no zone:
+// <input type="datetime-local"> and <input type="date">. Those are read as
+// UTC, because the alternative is the server's local zone — which makes the
+// same form mean different instants on a laptop and in a container.
+var timeFormats = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05",
+	"2006-01-02T15:04",
+	"2006-01-02",
+}
+
+func parseTime(raw string) (time.Time, error) {
+	for _, layout := range timeFormats {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("%q is not a date or time", raw)
 }
 
 // IsFormRequest reports whether the body is a form this package can decode.

@@ -1,9 +1,16 @@
-// Package req provides HTTP request parsing, validation, and input binding utilities.
+// Package req binds an HTTP request onto a Go struct.
 //
-// It supports automatic parsing of request data from various sources (JSON, form data,
-// query parameters, headers) into Go structs with validation support. The package
-// integrates with httpin for flexible input binding and provides validation interfaces
-// for request data validation.
+// One decoder per shape of body and no more: encoding/json for a JSON body,
+// and DecodeForm for everything else — URL-encoded, multipart, or a query
+// string on a request that has no body. Which one runs is decided by the
+// Content-Type, never by a struct tag.
+//
+// That last point is the whole design. There used to be two form binders,
+// this one and httpin's, and a single tag on a single field decided which an
+// input got. They disagreed about which array shapes bind, about whether a
+// checkbox's `on` is true, and about whether files bind at all — and every
+// one of those differences was discovered the same way, by something being
+// dropped in silence while the request answered success.
 package req
 
 import (
@@ -14,13 +21,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"reflect"
 	"strconv"
 	"strings"
-
-	"github.com/ggicci/httpin"
-	"github.com/ggicci/httpin/core"
-	"github.com/golang/gddo/httputil/header"
 )
 
 const InKey = "input"
@@ -139,14 +141,21 @@ func mediaTypeSpecificity(mediaType, kind string) (int, bool) {
 }
 
 func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
-	if r.Header.Get("Content-Type") != "" {
-		value, _ := header.ParseValueAndParams(r.Header, "Content-Type")
-		if value != "application/json" {
-			msg := "Content-Type header is not application/json"
-			return &MalformedRequest{Status: http.StatusUnsupportedMediaType, Message: msg}
+	// Classified the same way ParseInput classifies, so the two cannot
+	// disagree: a suffixed type such as application/vnd.api+json is JSON, and
+	// a body with no type at all is allowed through because something has
+	// evidently decided it is JSON by calling this.
+	//
+	// The previous check compared the media type to "application/json"
+	// exactly, so every +json API was refused with 415 by a decoder that
+	// would have parsed it perfectly.
+	if media := mediaType(r); media != "" && KindOf(r) != BodyJSON {
+		return &MalformedRequest{
+			Status:  http.StatusUnsupportedMediaType,
+			Message: fmt.Sprintf("Content-Type %s is not JSON", media),
 		}
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1048576)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return &MalformedRequest{Status: http.StatusBadRequest, Message: err.Error()}
@@ -219,6 +228,14 @@ func HasFormData(r *http.Request) bool {
 	return contentType != "" && strings.HasPrefix(contentType, "multipart/form-data")
 }
 
+// maxBodyBytes is how much of a body is read before it is refused.
+//
+// One megabyte: a JSON or XML document bigger than that is not a form
+// submission, and reading an unbounded body into memory is how one request
+// takes a process down. A file upload is not affected — it travels as
+// multipart, which streams to disk past maxMultipartMemory.
+const maxBodyBytes = 1 << 20
+
 func HasFormUrlEncoded(r *http.Request) bool {
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
 	return contentType != "" && strings.HasPrefix(contentType, "application/x-www-form-urlencoded")
@@ -229,61 +246,43 @@ func HasJSON(r *http.Request) bool {
 	return contentType != "" && strings.HasPrefix(contentType, "application/json")
 }
 
-func ParseInput(rr RequestResponder, inputStruct any, opts ...core.Option) error {
-	if HasJSON(rr.Request()) {
-		if err := DecodeJSONBody(rr.ResponseWriter(), rr.Request(), inputStruct); err != nil {
-			return err
-		}
-		return nil
-	}
-	// A form body against a struct tagged `form:` is decoded here. httpin reads
-	// only its own `in:` tag, so such a struct used to bind nothing at all and
-	// every field came back empty.
-	if IsFormRequest(rr.Request()) && HasFormTags(inputStruct) {
+// ParseInput binds a request onto an input struct.
+//
+// Two shapes of body, and the Content-Type decides which:
+//
+//   - application/json, or anything ending +json, is decoded by encoding/json
+//     onto `json:` tags.
+//   - application/xml, text/xml, or anything ending +xml, is decoded by
+//     encoding/xml onto `xml:` tags.
+//   - anything else is a form — URL-encoded, multipart, or a query string on
+//     a request with no body — and is decoded by DecodeForm, onto `form:` or
+//     `in:"form=..."` tags.
+//
+// Which one runs is decided by the Content-Type and never by which tags the
+// target happens to carry.
+//
+// This used to fall through to httpin for the second case unless the struct
+// declared a `form:` tag, which made a single character on one field decide
+// which of two binders an input got — and they disagreed about which array
+// shapes bind, whether a checkbox's `on` is true, and whether files bind at
+// all. Every one of those differences was found the same way: something was
+// dropped in silence and a request answered 302.
+func ParseInput(rr RequestResponder, inputStruct any) error {
+	switch KindOf(rr.Request()) {
+	case BodyJSON:
+		return DecodeJSONBody(rr.ResponseWriter(), rr.Request(), inputStruct)
+	case BodyXML:
+		return DecodeXMLBody(rr.ResponseWriter(), rr.Request(), inputStruct)
+	default:
 		return DecodeForm(rr.Request(), inputStruct)
 	}
-	co, err := httpin.New(inputStruct, opts...)
-
-	if err != nil {
-		return err
-	}
-
-	input, err := co.Decode(rr.Request())
-	if err != nil {
-		return err
-	}
-
-	reflect.ValueOf(inputStruct).Elem().Set(reflect.ValueOf(input).Elem())
-
-	return nil
 }
 
-func In(c Context, inputStruct any, opts ...core.Option) error {
-	if HasJSON(c.Request()) {
-		if err := DecodeJSONBody(c.ResponseWriter(), c.Request(), inputStruct); err != nil {
-			return err
-		}
-		c.Set(InKey, inputStruct)
-		return nil
-	}
-	if IsFormRequest(c.Request()) && HasFormTags(inputStruct) {
-		if err := DecodeForm(c.Request(), inputStruct); err != nil {
-			return err
-		}
-		c.Set(InKey, inputStruct)
-		return nil
-	}
-	co, err := httpin.New(inputStruct, opts...)
-
-	if err != nil {
+// In is ParseInput, with the result also stashed on the context.
+func In(c Context, inputStruct any) error {
+	if err := ParseInput(c, inputStruct); err != nil {
 		return err
 	}
-
-	input, err := co.Decode(c.Request())
-	if err != nil {
-		return err
-	}
-
-	c.Set(InKey, input)
+	c.Set(InKey, inputStruct)
 	return nil
 }

@@ -205,22 +205,51 @@ func TestAJSONBodyStillBindsByJSONTag(t *testing.T) {
 	}
 }
 
-// A struct tagged for httpin keeps using httpin, so adding this decoder changed
-// nothing for inputs that were already working.
-func TestAnHTTPInTaggedStructStillUsesHTTPIn(t *testing.T) {
-	type httpinInput struct {
+// Both tag vocabularies bind, through the one decoder.
+//
+// They used to select between two: `form:` went here and `in:"form="` went to
+// httpin, which is how a framework ended up with two sets of answers to "does
+// a checkbox send on" and "does images[0] bind". FieldName reads both now.
+func TestBothTagVocabulariesBind(t *testing.T) {
+	type formTagged struct {
+		Name string `form:"name"`
+	}
+	type inTagged struct {
 		Name string `in:"form=name"`
 	}
+	type both struct {
+		// form: wins, because it is the more specific of the two.
+		Name string `form:"name" in:"form=other"`
+	}
 
-	var input httpinInput
-	if err := ParseInput(post("name=Sidekick", urlencoded), &input); err != nil {
+	var a formTagged
+	if err := ParseInput(post("name=Sidekick", urlencoded), &a); err != nil {
 		t.Fatal(err)
 	}
-	if input.Name != "Sidekick" {
-		t.Errorf("Name = %q", input.Name)
+	if a.Name != "Sidekick" {
+		t.Errorf("form-tagged Name = %q", a.Name)
 	}
-	if HasFormTags(&input) {
-		t.Error("an in-tagged struct was reported as form-tagged")
+
+	var b inTagged
+	if err := ParseInput(post("name=Sidekick", urlencoded), &b); err != nil {
+		t.Fatal(err)
+	}
+	if b.Name != "Sidekick" {
+		t.Errorf("in-tagged Name = %q", b.Name)
+	}
+
+	var c both
+	if err := ParseInput(post("name=Sidekick&other=Nope", urlencoded), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Name != "Sidekick" {
+		t.Errorf("Name = %q, want the form: tag to win", c.Name)
+	}
+
+	for _, s := range []any{&a, &b, &c} {
+		if !HasFormTags(s) {
+			t.Errorf("%T was not reported as bindable", s)
+		}
 	}
 }
 
