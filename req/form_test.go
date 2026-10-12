@@ -375,3 +375,70 @@ func TestDecodeFormWithFilesOnANonMultipartBody(t *testing.T) {
 		t.Errorf("bound %d files from a form with none", len(got.Images))
 	}
 }
+
+// TestHttpinBindsACheckbox.
+//
+// A checked box sends `on`, and strconv.ParseBool knows neither that nor
+// `yes` — so httpin refused a form any browser produces, with
+// `strconv.ParseBool: parsing "on": invalid syntax`, and the request became
+// a 500. DecodeForm has always accepted them, which is the real problem: two
+// binders in one framework disagreeing about what `on` means, with a struct
+// tag deciding which one a given input gets.
+func TestHttpinBindsACheckbox(t *testing.T) {
+	type input struct {
+		Subscribed bool `in:"form=subscribed"`
+		Notify     bool `in:"form=notify"`
+	}
+
+	for _, c := range []struct {
+		sends string
+		want  bool
+	}{
+		{sends: "on", want: true},   // a checked box
+		{sends: "yes", want: true},  // some clients
+		{sends: "true", want: true}, // JSON-ish clients and our own composer
+		{sends: "1", want: true},
+		{sends: "off", want: false},
+		{sends: "no", want: false},
+		{sends: "false", want: false},
+		{sends: "0", want: false},
+	} {
+		t.Run(c.sends, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/f",
+				strings.NewReader("subscribed="+c.sends))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			var got input
+			rr := &formResponder{r: request, w: httptest.NewRecorder()}
+			if err := ParseInput(rr, &got); err != nil {
+				t.Fatalf("binding %q: %v", c.sends, err)
+			}
+			if got.Subscribed != c.want {
+				t.Errorf("subscribed=%s bound as %v, want %v", c.sends, got.Subscribed, c.want)
+			}
+			// An unchecked box sends nothing at all, which must stay false
+			// rather than becoming an error.
+			if got.Notify {
+				t.Error("an absent checkbox bound as true")
+			}
+		})
+	}
+}
+
+// A value that is not a boolean at all is still an error, rather than being
+// quietly read as false.
+func TestHttpinRefusesANonBoolean(t *testing.T) {
+	type input struct {
+		Subscribed bool `in:"form=subscribed"`
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/f",
+		strings.NewReader("subscribed=maybe"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	var got input
+	rr := &formResponder{r: request, w: httptest.NewRecorder()}
+	if err := ParseInput(rr, &got); err == nil {
+		t.Error("\"maybe\" was accepted as a boolean")
+	}
+}
