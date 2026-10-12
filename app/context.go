@@ -168,6 +168,13 @@ type Downloader interface {
 
 type Uploader interface {
 	Upload(uploadedFileName string, dir string, filename ...string) (*os.File, error)
+	// StoreUpload writes an already-opened upload to the configured disk.
+	//
+	// Upload works by form field name, which cannot serve a repeated field:
+	// FormFile returns the first file and nothing can reach the others. An
+	// input bound by httpin already holds every file it was sent, so this
+	// takes the file rather than the name.
+	StoreUpload(file multipart.File, dir string, filename string) (*os.File, error)
 }
 
 type HttpProvider interface {
@@ -670,6 +677,35 @@ func (c *ctx) Upload(uploadedFileName string, dir string, filename ...string) (*
 		return nil, fmt.Errorf("could not get form file: %w", err)
 	}
 	return nil, errors.New("file with the provided uploadedFileName does not exist")
+}
+
+// StoreUpload writes an already-opened upload to the configured disk.
+//
+// The filename is the caller's, never the client's: a client-supplied name
+// brings a path traversal, a collision between two people's "screenshot.png",
+// and a cache that cannot be busted. It is required rather than optional for
+// that reason — there is no sensible default that is also safe.
+func (c *ctx) StoreUpload(file multipart.File, dir string, filename string) (*os.File, error) {
+	if file == nil {
+		return nil, errors.New("StoreUpload: no file")
+	}
+	if filename == "" {
+		return nil, errors.New("StoreUpload: a filename is required")
+	}
+
+	fm := c.App().FileSystem()
+	if fm == nil {
+		e := errors.New("FileManager not set")
+		slog.Error(e.Error())
+		return nil, e
+	}
+
+	fss, err := fm.Disk()
+	if err != nil {
+		return nil, err
+	}
+
+	return fss.Upload(file, &multipart.FileHeader{Filename: filename}, dir)
 }
 
 func (c *ctx) File(path string, headers ...map[string][]string) error {
