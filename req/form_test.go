@@ -2,6 +2,7 @@ package req
 
 import (
 	"bytes"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -220,5 +221,157 @@ func TestAnHTTPInTaggedStructStillUsesHTTPIn(t *testing.T) {
 	}
 	if HasFormTags(&input) {
 		t.Error("an in-tagged struct was reported as form-tagged")
+	}
+}
+
+// buildUpload makes a multipart request with files under the given field
+// names, which is how a browser sends them.
+func buildUpload(t *testing.T, fields map[string]string, files map[string][]string) *http.Request {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for name, value := range fields {
+		if err := writer.WriteField(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, contents := range files {
+		for i, content := range contents {
+			part, err := writer.CreateFormFile(name, fmt.Sprintf("file-%d.png", i))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := part.Write([]byte(content)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/upload", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+// TestDecodeFormBindsUploadedFiles.
+//
+// DecodeForm used to skip every file field, so a struct declaring
+// `Images []*multipart.FileHeader` was handed an empty slice on every request.
+// The damage was that it looks like success: a handler that writes
+// `if len(input.Images) == 0 { return nil, nil }` accepts the upload, answers
+// 302, attaches nothing, and says nothing. The first report of it was somebody
+// posting a picture and getting a post without one.
+func TestDecodeFormBindsUploadedFiles(t *testing.T) {
+	type input struct {
+		Body   string                  `form:"body"`
+		Images []*multipart.FileHeader `form:"images"`
+	}
+
+	t.Run("repeated keys", func(t *testing.T) {
+		var got input
+		request := buildUpload(t,
+			map[string]string{"body": "look at this"},
+			map[string][]string{"images": {"first", "second"}})
+
+		if err := DecodeForm(request, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Body != "look at this" {
+			t.Errorf("Body = %q", got.Body)
+		}
+		if len(got.Images) != 2 {
+			t.Fatalf("bound %d files, want 2", len(got.Images))
+		}
+		if got.Images[0].Filename != "file-0.png" {
+			t.Errorf("first file = %q", got.Images[0].Filename)
+		}
+	})
+
+	// What an Inertia client sends: one key per file, indexed.
+	t.Run("indexed keys", func(t *testing.T) {
+		var got input
+		request := buildUpload(t,
+			map[string]string{"body": "look at this"},
+			map[string][]string{"images[0]": {"first"}, "images[1]": {"second"}})
+
+		if err := DecodeForm(request, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Images) != 2 {
+			t.Fatalf("bound %d files, want 2", len(got.Images))
+		}
+	})
+
+	t.Run("bracketed keys", func(t *testing.T) {
+		var got input
+		request := buildUpload(t, nil, map[string][]string{"images[]": {"only"}})
+
+		if err := DecodeForm(request, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Images) != 1 {
+			t.Fatalf("bound %d files, want 1", len(got.Images))
+		}
+	})
+
+	// An absent file is not an error: a field may simply not be filled in.
+	t.Run("no files", func(t *testing.T) {
+		var got input
+		request := buildUpload(t, map[string]string{"body": "words only"}, nil)
+
+		if err := DecodeForm(request, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Images) != 0 {
+			t.Errorf("bound %d files, want none", len(got.Images))
+		}
+		if got.Body != "words only" {
+			t.Errorf("Body = %q", got.Body)
+		}
+	})
+}
+
+// A single file field takes the first one, which is what one header can mean.
+func TestDecodeFormBindsASingleFile(t *testing.T) {
+	type input struct {
+		Avatar *multipart.FileHeader `form:"avatar"`
+	}
+
+	var got input
+	request := buildUpload(t, nil, map[string][]string{"avatar": {"portrait"}})
+	if err := DecodeForm(request, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Avatar == nil {
+		t.Fatal("no file was bound")
+	}
+	if got.Avatar.Filename != "file-0.png" {
+		t.Errorf("Filename = %q", got.Avatar.Filename)
+	}
+}
+
+// A URL-encoded body has no files, and asking for them must not fail.
+func TestDecodeFormWithFilesOnANonMultipartBody(t *testing.T) {
+	type input struct {
+		Body   string                  `form:"body"`
+		Images []*multipart.FileHeader `form:"images"`
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/upload",
+		strings.NewReader("body=words+only"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	var got input
+	if err := DecodeForm(request, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != "words only" {
+		t.Errorf("Body = %q", got.Body)
+	}
+	if len(got.Images) != 0 {
+		t.Errorf("bound %d files from a form with none", len(got.Images))
 	}
 }

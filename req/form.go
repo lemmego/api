@@ -74,9 +74,20 @@ func DecodeForm(r *http.Request, inputStruct any) error {
 		if name == "" || name == "-" || !target.Field(i).CanSet() {
 			continue
 		}
-		// A file is not a form value. It is read through FormFile, and
-		// attempting to parse one as text would fail on every upload.
+		// A file is not a form value: it lives in MultipartForm.File, not in
+		// the value map, so it is bound from there.
+		//
+		// This used to `continue`, on the grounds that a file is read through
+		// FormFile later. The effect was that a struct declaring
+		// `Images []*multipart.FileHeader` was handed an empty slice on every
+		// request — and a handler that reasonably writes
+		// `if len(input.Images) == 0 { return nil, nil }` then accepted the
+		// upload, returned success, and attached nothing. Silent, and on the
+		// happy path.
 		if isFileField(field.Type) {
+			if err := setFileField(r, target.Field(i), name); err != nil {
+				return fmt.Errorf("req: %s: %w", name, err)
+			}
 			continue
 		}
 
@@ -131,6 +142,82 @@ func lookup(values map[string][]string, name string) ([]string, bool) {
 		return found, true
 	}
 	return nil, false
+}
+
+// setFileField binds the uploaded headers for one field.
+//
+// It accepts the same three shapes as lookup does for values, because a client
+// that sends `images[0]` for its text fields sends `images[0]` for its files
+// too, and a form with a repeated input sends `images` several times. A field
+// that is not a slice takes the first file and ignores the rest, which is what
+// a single `*multipart.FileHeader` can mean.
+func setFileField(r *http.Request, field reflect.Value, name string) error {
+	if r.MultipartForm == nil {
+		// Not a multipart request, or one nothing has parsed. Either way there
+		// are no files, and an absent file is not an error — a field may
+		// simply not have been filled in.
+		return nil
+	}
+
+	headers := lookupFiles(r.MultipartForm.File, name)
+	if len(headers) == 0 {
+		return nil
+	}
+
+	if field.Kind() == reflect.Slice {
+		slice := reflect.MakeSlice(field.Type(), 0, len(headers))
+		for _, header := range headers {
+			value, err := fileValue(field.Type().Elem(), header)
+			if err != nil {
+				return err
+			}
+			slice = reflect.Append(slice, value)
+		}
+		field.Set(slice)
+		return nil
+	}
+
+	value, err := fileValue(field.Type(), headers[0])
+	if err != nil {
+		return err
+	}
+	field.Set(value)
+	return nil
+}
+
+// fileValue adapts a header to whichever of *multipart.FileHeader or
+// multipart.FileHeader the struct declared.
+func fileValue(t reflect.Type, header *multipart.FileHeader) (reflect.Value, error) {
+	switch {
+	case t == reflect.TypeOf(header):
+		return reflect.ValueOf(header), nil
+	case t == reflect.TypeOf(*header):
+		return reflect.ValueOf(*header), nil
+	default:
+		return reflect.Value{}, fmt.Errorf("cannot bind a file to %s", t)
+	}
+}
+
+// lookupFiles is lookup, over the file map.
+func lookupFiles(files map[string][]*multipart.FileHeader, name string) []*multipart.FileHeader {
+	if found, ok := files[name]; ok && len(found) > 0 {
+		return found
+	}
+	var indexed []*multipart.FileHeader
+	for index := 0; ; index++ {
+		found, ok := files[fmt.Sprintf("%s[%d]", name, index)]
+		if !ok || len(found) == 0 {
+			break
+		}
+		indexed = append(indexed, found[0])
+	}
+	if len(indexed) > 0 {
+		return indexed
+	}
+	if found, ok := files[name+"[]"]; ok {
+		return found
+	}
+	return nil
 }
 
 func isFileField(t reflect.Type) bool {
