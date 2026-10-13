@@ -2,6 +2,7 @@ package fs
 
 import (
 	"log/slog"
+	"path/filepath"
 
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/fs"
@@ -93,9 +94,20 @@ func (fss *Provider) logServedRoot(fm *fs.FileSystem, prefix string) {
 		return
 	}
 
+	// Absolute, which is the entire point of logging it.
+	//
+	// GetUrl answers the configured path joined with the request, so for a
+	// disk configured as "./storage/app/public" it answers
+	// "storage/app/public" — the value from the configuration file, which is
+	// the one thing the reader already knows. What is worth printing is where
+	// that resolved to in this process, because the failure being diagnosed
+	// is a relative path and a working directory nobody chose.
 	root := ""
 	if located, locateErr := disk.GetUrl("."); locateErr == nil {
 		root = located
+		if absolute, absErr := filepath.Abs(located); absErr == nil {
+			root = absolute
+		}
 	}
 	slog.Info("Serving stored files",
 		"prefix", prefix, "disk", fss.PublicDisk, "driver", disk.Driver(),
