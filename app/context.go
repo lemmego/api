@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lemmego/api/session"
+	"github.com/lemmego/fsys"
 	"io"
 	"log/slog"
 	"mime"
@@ -168,6 +169,14 @@ type Downloader interface {
 
 type Uploader interface {
 	Upload(uploadedFileName string, dir string, filename ...string) (*os.File, error)
+	// UploadOn is Upload against a named disk.
+	//
+	// It exists because "which disk" is a decision per upload, not per
+	// application: an avatar belongs on a disk that is served over HTTP and a
+	// signed contract belongs on one that is not, and a single default disk
+	// forces both into the same directory. That is how a project ends up
+	// serving its logs to reach its avatars.
+	UploadOn(disk string, uploadedFileName string, dir string, filename ...string) (*os.File, error)
 	// StoreUpload writes an already-opened upload to the configured disk.
 	//
 	// Upload works by form field name, which cannot serve a repeated field:
@@ -175,6 +184,8 @@ type Uploader interface {
 	// input bound by httpin already holds every file it was sent, so this
 	// takes the file rather than the name.
 	StoreUpload(file multipart.File, dir string, filename string) (*os.File, error)
+	// StoreUploadOn is StoreUpload against a named disk.
+	StoreUploadOn(disk string, file multipart.File, dir string, filename string) (*os.File, error)
 }
 
 type HttpProvider interface {
@@ -643,6 +654,10 @@ func (f *multipartFile) Close() error {
 }
 
 func (c *ctx) Upload(uploadedFileName string, dir string, filename ...string) (*os.File, error) {
+	return c.UploadOn("", uploadedFileName, dir, filename...)
+}
+
+func (c *ctx) UploadOn(disk string, uploadedFileName string, dir string, filename ...string) (*os.File, error) {
 	file, header, err := c.FormFile(uploadedFileName)
 	if err == nil {
 		defer func() {
@@ -655,17 +670,7 @@ func (c *ctx) Upload(uploadedFileName string, dir string, filename ...string) (*
 			header.Filename = filename[0]
 		}
 
-		fm := c.App().FileSystem()
-		//fm := Get[*fs.FileSystem](c.App())
-		//fm := fs.Get(c.App())
-		if fm == nil {
-			e := errors.New("FileManager not set")
-			slog.Error(e.Error())
-			return nil, e
-		}
-
-		fss, err := fm.Disk()
-
+		fss, err := c.disk(disk)
 		if err != nil {
 			return nil, err
 		}
@@ -686,6 +691,10 @@ func (c *ctx) Upload(uploadedFileName string, dir string, filename ...string) (*
 // and a cache that cannot be busted. It is required rather than optional for
 // that reason — there is no sensible default that is also safe.
 func (c *ctx) StoreUpload(file multipart.File, dir string, filename string) (*os.File, error) {
+	return c.StoreUploadOn("", file, dir, filename)
+}
+
+func (c *ctx) StoreUploadOn(disk string, file multipart.File, dir string, filename string) (*os.File, error) {
 	if file == nil {
 		return nil, errors.New("StoreUpload: no file")
 	}
@@ -693,19 +702,26 @@ func (c *ctx) StoreUpload(file multipart.File, dir string, filename string) (*os
 		return nil, errors.New("StoreUpload: a filename is required")
 	}
 
+	fss, err := c.disk(disk)
+	if err != nil {
+		return nil, err
+	}
+
+	return fss.Upload(file, &multipart.FileHeader{Filename: filename}, dir)
+}
+
+// disk resolves a disk by name, or the default when the name is empty.
+func (c *ctx) disk(name string) (fsys.FS, error) {
 	fm := c.App().FileSystem()
 	if fm == nil {
 		e := errors.New("FileManager not set")
 		slog.Error(e.Error())
 		return nil, e
 	}
-
-	fss, err := fm.Disk()
-	if err != nil {
-		return nil, err
+	if name == "" {
+		return fm.Disk()
 	}
-
-	return fss.Upload(file, &multipart.FileHeader{Filename: filename}, dir)
+	return fm.Disk(name)
 }
 
 func (c *ctx) File(path string, headers ...map[string][]string) error {

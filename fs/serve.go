@@ -31,6 +31,23 @@ type ServeOptions struct {
 	// of that at a guessable URL. An allowlist cannot be widened by accident.
 	Dirs []string
 
+	// EntireDisk serves everything on the disk instead of the directories in
+	// Dirs, and is only ever correct for a disk whose root holds nothing
+	// private.
+	//
+	// That is what a dedicated public disk is for — root it at
+	// storage/app/public, keep the logs, the sessions and the database
+	// outside it, and "what is public" becomes a fact about the filesystem
+	// rather than a list somebody has to remember to keep short. Dirs is the
+	// other way round: it is for serving part of a disk that also holds
+	// things it must not serve, which works but puts the security property
+	// in Go code that a later edit can widen.
+	//
+	// It is a separate field rather than "Dirs empty means everything"
+	// because the dangerous reading has to be the one nobody reaches by
+	// accident: an empty Dirs serves nothing.
+	EntireDisk bool
+
 	// Disk is the disk to read from. Empty means the default disk.
 	Disk string
 }
@@ -45,7 +62,8 @@ type ServeOptions struct {
 // URL that nothing answers. The browser shows a broken image and the server
 // log shows a 404 among the 404s.
 //
-// It answers 404 for everything it refuses, including a path outside Dirs.
+// It answers 404 for everything it refuses, including a path outside Dirs or
+// off the disk.
 // Whether a file exists somewhere the caller may not read is not information
 // worth handing out, and a 403 hands it out.
 //
@@ -66,12 +84,13 @@ func (fm *FileSystem) Serve(opts ServeOptions) http.Handler {
 		prefix = "/"
 	}
 	dirs := slices.Clone(opts.Dirs)
+	entire := opts.EntireDisk
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Set before anything can return, so it is on the refusals too.
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
-		name, ok := storedPath(prefix, dirs, r.URL.Path)
+		name, ok := storedPath(prefix, dirs, entire, r.URL.Path)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -161,8 +180,8 @@ func serveStream(w http.ResponseWriter, r *http.Request, disk fsys.FS, name stri
 // point of doing it here: a request for "posts/../logs/app.log" is tested as
 // "logs/app.log" and refused for not being in Dirs, rather than being passed
 // to the disk as something that looks allowed.
-func storedPath(prefix string, dirs []string, urlPath string) (string, bool) {
-	if len(dirs) == 0 {
+func storedPath(prefix string, dirs []string, entire bool, urlPath string) (string, bool) {
+	if len(dirs) == 0 && !entire {
 		return "", false
 	}
 
@@ -176,6 +195,23 @@ func storedPath(prefix string, dirs []string, urlPath string) (string, bool) {
 	cleaned := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(rest, "/")), "/")
 	if cleaned == "" || cleaned == "." {
 		return "", false
+	}
+
+	if entire {
+		// Every directory under the root is reachable, and a file directly in
+		// it too — which is the difference from the Dirs case, where a path
+		// with no directory segment cannot be matched at all.
+		//
+		// Containment rests on two independent layers, and it is worth being
+		// precise about which does what: the cleaning above removes every
+		// ".." before the path is used, and fsys's own resolvePath refuses a
+		// path that lands outside the disk root or resolves there through a
+		// symlink. Removing the cleaning does not open an escape here —
+		// proven by mutating it, where only the Dirs test failed — because
+		// the disk layer still refuses. The cleaning is what makes the Dirs
+		// allowlist meaningful, since without it "posts/../logs/app.log"
+		// would be tested as being in "posts".
+		return cleaned, true
 	}
 
 	dir, file, found := strings.Cut(cleaned, "/")
