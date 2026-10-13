@@ -246,3 +246,140 @@ type simpleError string
 func (e simpleError) Error() string { return string(e) }
 
 func errOf(s string) error { return simpleError(s) }
+
+// uploadFields builds a multi-file field the way a form with several
+// <input type=file name=images> does, which is the shape the rules used to
+// see one tenth of.
+func uploadFields(t *testing.T, files map[string][]byte, order []string) []*multipart.FileHeader {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for _, name := range order {
+		part, err := writer.CreateFormFile("images", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write(files[name]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writer.Close()
+
+	reader := multipart.NewReader(&body, writer.Boundary())
+	form, err := reader.ReadForm(10 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return form.File["images"]
+}
+
+// The regression. uploadHeader answered with headers[0], so a rule on a
+// multi-file field checked the first attachment and waved the rest through:
+// a real PNG in front of an HTML file passed FileTypes, and the HTML was
+// stored and later served from the application's own origin.
+func TestFileTypesChecksEveryAttachedFile(t *testing.T) {
+	headers := uploadFields(t, map[string][]byte{
+		"holiday.png": pngBytes(t, 8, 8),
+		"payload.png": []byte("<html><script>alert(document.cookie)</script></html>"),
+	}, []string{"holiday.png", "payload.png"})
+
+	v := NewValidator()
+	v.Field("images", headers).FileTypes("image/png", "image/jpeg")
+
+	if v.IsValid() {
+		t.Fatal("an HTML file behind a real image passed FileTypes — every attachment must be sniffed, not just the first")
+	}
+	if got := strings.Join(v.Errors["images"], " "); !strings.Contains(got, "payload.png") {
+		t.Errorf("errors = %q, want the offending filename so a person knows which of two failed", got)
+	}
+}
+
+func TestImageChecksEveryAttachedFile(t *testing.T) {
+	headers := uploadFields(t, map[string][]byte{
+		"real.png": pngBytes(t, 8, 8),
+		"fake.png": []byte("this is not an image"),
+	}, []string{"real.png", "fake.png"})
+
+	v := NewValidator()
+	v.Field("images", headers).Image()
+
+	if v.IsValid() {
+		t.Fatal("a non-image behind a real one passed Image()")
+	}
+}
+
+func TestMaxSizeChecksEveryAttachedFile(t *testing.T) {
+	headers := uploadFields(t, map[string][]byte{
+		"small.png": pngBytes(t, 2, 2),
+		"large.png": pngBytes(t, 400, 400),
+	}, []string{"small.png", "large.png"})
+
+	v := NewValidator()
+	v.Field("images", headers).MaxSize(300)
+
+	if v.IsValid() {
+		t.Fatal("an oversized file behind a small one passed MaxSize")
+	}
+}
+
+func TestImageDimensionsChecksEveryAttachedFile(t *testing.T) {
+	headers := uploadFields(t, map[string][]byte{
+		"big-enough.png": pngBytes(t, 64, 64),
+		"too-small.png":  pngBytes(t, 4, 4),
+	}, []string{"big-enough.png", "too-small.png"})
+
+	v := NewValidator()
+	v.Field("images", headers).ImageDimensions(64, 64, 4096, 4096)
+
+	if v.IsValid() {
+		t.Fatal("an undersized image behind an acceptable one passed ImageDimensions")
+	}
+}
+
+// Every attachment is reported, not just the first failure, because fixing
+// one and resubmitting to be told about the next is a worse form than being
+// told about both.
+func TestEveryFailingAttachmentIsReported(t *testing.T) {
+	headers := uploadFields(t, map[string][]byte{
+		"ok.png":  pngBytes(t, 8, 8),
+		"one.png": []byte("not an image"),
+		"two.png": []byte("also not an image"),
+	}, []string{"ok.png", "one.png", "two.png"})
+
+	v := NewValidator()
+	v.Field("images", headers).Image()
+
+	if len(v.Errors["images"]) != 2 {
+		t.Fatalf("errors = %v, want one per failing file", v.Errors["images"])
+	}
+}
+
+// A single upload's message is unchanged: there is nothing to disambiguate,
+// and prefixing a client-supplied filename onto every error would put
+// somebody's string at the front of the message for no reason.
+func TestASingleUploadKeepsItsPlainMessage(t *testing.T) {
+	header := uploadField(t, "avatar.png", []byte("not an image"))
+
+	v := NewValidator()
+	v.Field("avatar", header).Image()
+
+	if len(v.Errors["avatar"]) != 1 {
+		t.Fatalf("errors = %v, want one", v.Errors["avatar"])
+	}
+	if got := v.Errors["avatar"][0]; got != "This file is not an image" {
+		t.Errorf("message = %q, want the unprefixed message", got)
+	}
+}
+
+// An empty multi-file field is left alone rather than failed, for the same
+// reason a nil single upload is: Required is what decides whether an absent
+// file is acceptable.
+func TestAnEmptyMultiFileFieldIsLeftAlone(t *testing.T) {
+	v := NewValidator()
+	v.Field("images", []*multipart.FileHeader{}).Image().FileTypes("image/png").MaxSize(1)
+
+	if !v.IsValid() {
+		t.Errorf("an absent attachment reported %v", v.Errors)
+	}
+}

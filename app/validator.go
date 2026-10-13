@@ -13,6 +13,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -775,12 +776,14 @@ func (v *Validator) Err() error { return v.err }
 // rule sees it, so this bounds what gets stored, not what gets received. Use
 // http.MaxBytesReader to bound the request itself.
 func (f *vField) MaxSize(max int64) *vField {
-	header, ok := f.uploadHeader()
+	headers, ok := f.uploadHeaders()
 	if !ok {
 		return f
 	}
-	if header.Size > max {
-		f.vee.AddError(f.name, fmt.Sprintf("This file is larger than %s", humanBytes(max)))
+	for _, header := range headers {
+		if header.Size > max {
+			f.uploadError(headers, header, fmt.Sprintf("This file is larger than %s", humanBytes(max)))
+		}
 	}
 	return f
 }
@@ -788,12 +791,14 @@ func (f *vField) MaxSize(max int64) *vField {
 // MinSize fails when an uploaded file is smaller than min bytes. A
 // zero-length upload is usually a failed selection rather than a choice.
 func (f *vField) MinSize(min int64) *vField {
-	header, ok := f.uploadHeader()
+	headers, ok := f.uploadHeaders()
 	if !ok {
 		return f
 	}
-	if header.Size < min {
-		f.vee.AddError(f.name, fmt.Sprintf("This file is smaller than %s", humanBytes(min)))
+	for _, header := range headers {
+		if header.Size < min {
+			f.uploadError(headers, header, fmt.Sprintf("This file is smaller than %s", humanBytes(min)))
+		}
 	}
 	return f
 }
@@ -806,23 +811,25 @@ func (f *vField) MinSize(min int64) *vField {
 // extension on an HTML file is how a stored upload becomes a cross-site
 // scripting vector when it is later served from the same origin.
 func (f *vField) FileTypes(types ...string) *vField {
-	header, ok := f.uploadHeader()
+	headers, ok := f.uploadHeaders()
 	if !ok {
 		return f
 	}
-	detected, err := sniffUpload(header)
-	if err != nil {
-		f.vee.AddError(f.name, "This file could not be read")
-		return f
-	}
-	for _, allowed := range types {
-		// DetectContentType appends parameters, as in "text/plain;
-		// charset=utf-8", so compare the type and ignore them.
-		if strings.EqualFold(mediaType(detected), mediaType(allowed)) {
-			return f
+	for _, header := range headers {
+		detected, err := sniffUpload(header)
+		if err != nil {
+			f.uploadError(headers, header, "This file could not be read")
+			continue
+		}
+		allowedType := slices.ContainsFunc(types, func(allowed string) bool {
+			// DetectContentType appends parameters, as in "text/plain;
+			// charset=utf-8", so compare the type and ignore them.
+			return strings.EqualFold(mediaType(detected), mediaType(allowed))
+		})
+		if !allowedType {
+			f.uploadError(headers, header, "This file must be one of: "+strings.Join(types, ", "))
 		}
 	}
-	f.vee.AddError(f.name, "This file must be one of: "+strings.Join(types, ", "))
 	return f
 }
 
@@ -830,19 +837,21 @@ func (f *vField) FileTypes(types ...string) *vField {
 // avatar field wants: it proves the bytes are an image rather than something
 // named like one.
 func (f *vField) Image() *vField {
-	header, ok := f.uploadHeader()
+	headers, ok := f.uploadHeaders()
 	if !ok {
 		return f
 	}
-	file, err := header.Open()
-	if err != nil {
-		f.vee.AddError(f.name, "This file could not be read")
-		return f
-	}
-	defer file.Close()
-
-	if _, _, err := image.DecodeConfig(file); err != nil {
-		f.vee.AddError(f.name, "This file is not an image")
+	for _, header := range headers {
+		file, err := header.Open()
+		if err != nil {
+			f.uploadError(headers, header, "This file could not be read")
+			continue
+		}
+		_, _, err = image.DecodeConfig(file)
+		_ = file.Close()
+		if err != nil {
+			f.uploadError(headers, header, "This file is not an image")
+		}
 	}
 	return f
 }
@@ -850,51 +859,80 @@ func (f *vField) Image() *vField {
 // ImageDimensions fails unless a decodable image's size is within bounds. A
 // zero bound is ignored, so one side can be constrained alone.
 func (f *vField) ImageDimensions(minWidth, minHeight, maxWidth, maxHeight int) *vField {
-	header, ok := f.uploadHeader()
+	headers, ok := f.uploadHeaders()
 	if !ok {
 		return f
 	}
-	file, err := header.Open()
-	if err != nil {
-		f.vee.AddError(f.name, "This file could not be read")
-		return f
-	}
-	defer file.Close()
-
-	config, _, err := image.DecodeConfig(file)
-	if err != nil {
-		f.vee.AddError(f.name, "This file is not an image")
-		return f
-	}
-	switch {
-	case minWidth > 0 && config.Width < minWidth,
-		minHeight > 0 && config.Height < minHeight:
-		f.vee.AddError(f.name, fmt.Sprintf("This image must be at least %dx%d pixels", minWidth, minHeight))
-	case maxWidth > 0 && config.Width > maxWidth,
-		maxHeight > 0 && config.Height > maxHeight:
-		f.vee.AddError(f.name, fmt.Sprintf("This image must be at most %dx%d pixels", maxWidth, maxHeight))
+	for _, header := range headers {
+		file, err := header.Open()
+		if err != nil {
+			f.uploadError(headers, header, "This file could not be read")
+			continue
+		}
+		config, _, err := image.DecodeConfig(file)
+		_ = file.Close()
+		if err != nil {
+			f.uploadError(headers, header, "This file is not an image")
+			continue
+		}
+		switch {
+		case minWidth > 0 && config.Width < minWidth,
+			minHeight > 0 && config.Height < minHeight:
+			f.uploadError(headers, header, fmt.Sprintf("This image must be at least %dx%d pixels", minWidth, minHeight))
+		case maxWidth > 0 && config.Width > maxWidth,
+			maxHeight > 0 && config.Height > maxHeight:
+			f.uploadError(headers, header, fmt.Sprintf("This image must be at most %dx%d pixels", maxWidth, maxHeight))
+		}
 	}
 	return f
 }
 
-// uploadHeader returns the field's value as an upload.
+// uploadHeaders returns every upload in the field.
 //
 // A field that is not an upload is left alone rather than failed: the rules
 // above are chained after Required, which is what decides whether an absent
 // file is acceptable. Failing here as well would report two errors for one
 // missing field.
-func (f *vField) uploadHeader() (*multipart.FileHeader, bool) {
+//
+// It used to answer with the first file alone, so on a multi-file field every
+// rule checked one attachment and waved the rest through: four files where
+// only the first is a PNG passed FileTypes, and the HTML one behind it was
+// stored and later served from the application's own origin. That is the
+// shape of failure this package keeps turning up — the request succeeds and
+// the check did nothing — so the rules run over all of them.
+func (f *vField) uploadHeaders() ([]*multipart.FileHeader, bool) {
 	switch value := f.value.(type) {
 	case *multipart.FileHeader:
-		return value, value != nil
-	case multipart.FileHeader:
-		return &value, true
-	case []*multipart.FileHeader:
-		if len(value) > 0 {
-			return value[0], value[0] != nil
+		if value == nil {
+			return nil, false
 		}
+		return []*multipart.FileHeader{value}, true
+	case multipart.FileHeader:
+		return []*multipart.FileHeader{&value}, true
+	case []*multipart.FileHeader:
+		headers := make([]*multipart.FileHeader, 0, len(value))
+		for _, header := range value {
+			if header != nil {
+				headers = append(headers, header)
+			}
+		}
+		return headers, len(headers) > 0
 	}
 	return nil, false
+}
+
+// uploadError reports a failure against one file.
+//
+// The filename is prefixed only when the field holds more than one, because
+// then "This file is not an image" does not say which of four it is. For a
+// single upload the message is unchanged, and the filename is the client's
+// own string, so it is never the only thing a message says.
+func (f *vField) uploadError(headers []*multipart.FileHeader, header *multipart.FileHeader, message string) {
+	if len(headers) > 1 && header.Filename != "" {
+		f.vee.AddError(f.name, header.Filename+" — "+message)
+		return
+	}
+	f.vee.AddError(f.name, message)
 }
 
 // sniffUpload reads the first 512 bytes and rewinds, so a later rule and the
