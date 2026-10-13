@@ -150,3 +150,69 @@ func TestConcurrentDispatchAndRegistration(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// The tests above drive eventRegistry directly, which is how the bug below
+// survived: the only broken code was the variadic wrapper on application, and
+// nothing crossed it. These do.
+
+func TestDispatchDeliversOnePayloadAsItself(t *testing.T) {
+	a := Configure().(*application)
+
+	type hit struct{ Key string }
+	var got any
+	a.On("cache.hit", func(payload any) error {
+		got = payload
+		return nil
+	})
+	a.Dispatch("cache.hit", hit{Key: "k"})
+
+	// The assertion a listener would actually write. Before the fix this
+	// received []any{hit{...}} and failed, which is what every documented
+	// cache event listener would have done.
+	event, ok := got.(hit)
+	if !ok {
+		t.Fatalf("listener received %T, want app.hit — a single payload must "+
+			"arrive as itself, not wrapped in a slice", got)
+	}
+	if event.Key != "k" {
+		t.Fatalf("got key %q, want k", event.Key)
+	}
+}
+
+func TestDispatchDeliversSeveralPayloadsAsASlice(t *testing.T) {
+	a := Configure().(*application)
+
+	var got any
+	a.On("many", func(payload any) error {
+		got = payload
+		return nil
+	})
+	a.Dispatch("many", 1, 2)
+
+	values, ok := got.([]any)
+	if !ok {
+		t.Fatalf("listener received %T, want []any", got)
+	}
+	if len(values) != 2 {
+		t.Fatalf("got %d payloads, want 2", len(values))
+	}
+}
+
+func TestDispatchWithNoPayloadDeliversNil(t *testing.T) {
+	a := Configure().(*application)
+
+	called := false
+	a.On("bare", func(payload any) error {
+		called = true
+		if payload != nil {
+			t.Errorf("got payload %#v, want nil — an event with nothing to "+
+				"carry must not arrive carrying an empty slice", payload)
+		}
+		return nil
+	})
+	a.Dispatch("bare")
+
+	if !called {
+		t.Fatal("listener was not called")
+	}
+}

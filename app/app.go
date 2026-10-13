@@ -187,8 +187,24 @@ func (a *application) On(event string, listener EventListener) {
 	a.eventRegistry.On(event, listener)
 }
 
+// Dispatch delivers an event to its listeners.
+//
+// A single payload is passed through as itself. It used to be forwarded as the
+// whole variadic slice, so a listener registered for one value received
+// []any{value} and every type assertion against it failed — including the one
+// behind cache's event bridge, which has therefore been dispatching a payload
+// nobody could read since it shipped. Nothing compensated for it, because
+// nothing in the monorepo registers a listener at all, and the existing tests
+// call eventRegistry.Dispatch directly and so never cross this wrapper.
 func (a *application) Dispatch(event string, payload ...any) {
-	a.eventRegistry.Dispatch(event, payload)
+	switch len(payload) {
+	case 0:
+		a.eventRegistry.Dispatch(event, nil)
+	case 1:
+		a.eventRegistry.Dispatch(event, payload[0])
+	default:
+		a.eventRegistry.Dispatch(event, payload)
+	}
 }
 
 func (a *application) WithProviders(providers []Provider) Bootstrapper {
@@ -716,6 +732,13 @@ func (a *application) HandleSignals(srv *http.Server) {
 				timeout = 2 * time.Second // Still fast for manual dev shutdown
 			}
 		}
+
+		// Announced before Shutdown, not after, so a provider holding
+		// long-lived connections can let them go while Shutdown is still
+		// waiting for them. Its own Shutdown runs afterwards, by which point
+		// those connections have already held the server for the full
+		// timeout.
+		a.Dispatch(ServerStopping)
 
 		// Gracefully shutdown the server
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)

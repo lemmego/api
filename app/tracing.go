@@ -2,8 +2,11 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -346,6 +349,12 @@ func (t *Tracer) TraceMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+var (
+	_ http.Flusher                              = (*tracingResponseWriter)(nil)
+	_ http.Hijacker                             = (*tracingResponseWriter)(nil)
+	_ interface{ Unwrap() http.ResponseWriter } = (*tracingResponseWriter)(nil)
+)
+
 // tracingResponseWriter wraps http.ResponseWriter to capture status code
 type tracingResponseWriter struct {
 	http.ResponseWriter
@@ -366,19 +375,33 @@ func (rw *tracingResponseWriter) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
-// Flush implements http.Flusher interface
+// Unwrap returns the writer this one wraps.
+//
+// It replaces a hand-written Flush and Hijack pair, the second of which was
+// declared as `(interface{}, interface{}, error)` and so had never satisfied
+// http.Hijacker at all — despite a comment saying it implemented it. A type
+// assertion against it was always false, and because this middleware is not
+// wired anywhere, nothing ever found out.
+//
+// One Unwrap is both shorter and more complete: http.ResponseController
+// follows it to reach flushing, hijacking and read/write deadlines, including
+// any optional interface added to net/http after this was written.
+func (rw *tracingResponseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+// Flush and Hijack are forwarded for the handlers that assert on them
+// directly, since a type assertion does not follow Unwrap. Both go through a
+// ResponseController built on the wrapped writer, not on this one, which
+// would recurse.
 func (rw *tracingResponseWriter) Flush() {
-	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
+	if err := http.NewResponseController(rw.ResponseWriter).Flush(); err != nil {
+		slog.Warn("tracing: a response could not be flushed", "error", err)
 	}
 }
 
-// Hijack implements http.Hijacker interface
-func (rw *tracingResponseWriter) Hijack() (c interface{}, rw2 interface{}, err error) {
-	if hijacker, ok := rw.ResponseWriter.(http.Hijacker); ok {
-		return hijacker.Hijack()
-	}
-	return nil, nil, fmt.Errorf("http.Hijacker is not supported")
+func (rw *tracingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(rw.ResponseWriter).Hijack()
 }
 
 // DefaultTracer is the default tracer instance

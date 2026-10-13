@@ -16,6 +16,22 @@ const (
 	ServicesRegistering   = "services.registering"
 	ServicesRegistered    = "services.registered"
 	ServerStarted         = "server.started"
+
+	// ServerStopping is dispatched when a shutdown signal arrives, before
+	// http.Server.Shutdown is called.
+	//
+	// The ordering is the whole point of it existing. Shutdown waits for
+	// active requests, and a provider's own Shutdown runs *after* it — so a
+	// provider holding long-lived connections had no moment at which it could
+	// let them go, and its connections would hold Shutdown for its full
+	// timeout before the provider was asked to do anything. A server-sent
+	// events stream is an active request for as long as somebody has the page
+	// open.
+	//
+	// Listeners run synchronously on the signal-handling goroutine, so a
+	// listener that blocks delays the shutdown it was meant to make possible.
+	// Release connections here; do not drain queues.
+	ServerStopping = "server.stopping"
 )
 
 type EventListener func(payload any) error
