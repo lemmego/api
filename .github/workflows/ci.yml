@@ -1,52 +1,54 @@
+# This workflow runs in THIS module's own repository, where the repository
+# root is the module root.
+#
+# That is why there are no `paths:` filters and no `cd` into a subdirectory.
+# The three workflows that used to exist in this monorepo were written as
+# though it were a single repository, filtering on paths like "api/**" and
+# "go.work" which do not exist in a per-module checkout. They therefore never
+# triggered — `gh run list` reported zero runs for queue and tasker ever, and
+# nothing but GitHub's own Dependency Graph for api — and every step would
+# have failed if they had, since `cd api`, `go build ./api/...` and
+# `go work sync` all name things that are not there.
+#
+# There is also no GOWORK=off step. That distinction matters in the monorepo
+# working tree, where a workspace can mask a missing requirement; here there
+# is no go.work at all, so the ordinary run already is the standalone one.
 name: CI
 
 on:
   push:
-    branches: [develop, main]
-    paths:
-      - 'api/**'
-      - 'fsys/**'
-      - 'migration/**'
-      - 'go.work'
-      - 'go.work.sum'
+    branches: [main, develop]
   pull_request:
-    branches: [develop, main]
-    paths:
-      - 'api/**'
-      - 'fsys/**'
-      - 'migration/**'
-      - 'go.work'
-      - 'go.work.sum'
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.25', '1.26']
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v5
+      # go-version-file rather than a literal: the module declares the version
+      # it needs. The old workflow ran a matrix of 1.25 and 1.26 against
+      # modules that declare go 1.27, so it was testing something nobody runs.
+      - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
+          check-latest: true
 
-      - name: Sync workspace
-        run: go work sync
-
-      - name: Tidy check
+      - name: go.mod and go.sum are tidy
         run: |
-          cd api && go mod tidy
-          test -z "$(git diff --name-only)" || (echo "go.mod/go.sum not in sync — run 'go mod tidy'" && exit 1)
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
 
       - name: Build
-        run: go build ./api/...
+        run: go build ./...
 
       - name: Vet
-        run: go vet ./api/...
+        run: go vet ./...
 
       - name: Test
-        run: go test -race -count=1 ./api/...
+        run: go test -race -count=1 ./...
