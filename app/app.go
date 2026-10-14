@@ -13,7 +13,6 @@ import (
 	"html"
 	"maps"
 
-	"github.com/lemmego/api/fs"
 	"github.com/lemmego/api/session"
 
 	"log"
@@ -102,8 +101,9 @@ type AppCore interface {
 	// Session returns the session manager instance
 	Session() *session.Session
 
-	// FileSystem returns the file system abstraction instance
-	FileSystem() *fs.FileSystem
+	// FileSystem resolves storage disks. It is nil when no filesystem
+	// provider is registered, which the file methods on Context handle.
+	FileSystem() FileSystem
 
 	// RunningInConsole returns true if the application is running as a CLI command
 	RunningInConsole() bool
@@ -235,8 +235,15 @@ func (a *application) Session() *session.Session {
 	return Get[*session.Session](a)
 }
 
-func (a *application) FileSystem() *fs.FileSystem {
-	return Get[*fs.FileSystem](a)
+// FileSystem returns the registered filesystem, or nil when there is none.
+//
+// Lookup rather than Get: an application that never registered the
+// provider has no business being taken down on the first request that
+// merely *could* touch a file, and every caller here already tests for
+// nil. Those tests were dead code while this panicked.
+func (a *application) FileSystem() FileSystem {
+	fm, _ := Lookup[FileSystem](a)
+	return fm
 }
 
 func (a *application) Config() config.Configuration {

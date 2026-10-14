@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lemmego/api/session"
-	"github.com/lemmego/fsys"
 	"io"
 	"log/slog"
 	"mime"
@@ -711,7 +710,7 @@ func (c *ctx) StoreUploadOn(disk string, file multipart.File, dir string, filena
 }
 
 // disk resolves a disk by name, or the default when the name is empty.
-func (c *ctx) disk(name string) (fsys.FS, error) {
+func (c *ctx) disk(name string) (Disk, error) {
 	fm := c.App().FileSystem()
 	if fm == nil {
 		e := errors.New("FileManager not set")

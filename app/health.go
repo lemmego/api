@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/lemmego/api/fs"
 	"github.com/lemmego/api/session"
 	"log/slog"
 	"net/http"
@@ -360,7 +359,7 @@ func (h *HealthChecker) RegisterDefaultChecks() {
 				return fmt.Errorf("application not initialized")
 			}
 
-			if _, ok := Lookup[*fs.FileSystem](h.app); !ok {
+			if _, ok := Lookup[FileSystem](h.app); !ok {
 				return fmt.Errorf("no file system is registered")
 			}
 

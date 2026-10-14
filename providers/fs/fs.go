@@ -42,7 +42,16 @@ func (fss *Provider) Provide(a app.App) error {
 	slog.Debug("Registering FS")
 	fm := fs.NewFileSystem()
 	fss.fm = fm
+	// Under the concrete type, for anything that wants api/fs itself...
 	a.AddService(fm)
+	// ...and under the core's interface, which is what App.FileSystem()
+	// resolves. The adapter exists because api/fs.Disk returns fsys.FS and
+	// the core declares its own identically-shaped Disk: Go needs the method
+	// signatures to match exactly for interface satisfaction, so a return
+	// type of fsys.FS does not satisfy one of app.Disk even though every
+	// value it returns does. One method, and it keeps the AWS and Google
+	// Cloud SDKs out of every package that imports api/app.
+	app.RegisterIfAbsent[app.FileSystem](a, disks{fm})
 
 	if len(fss.Public) > 0 || fss.PublicEntireDisk {
 		prefix := fss.PublicPrefix
@@ -72,9 +81,22 @@ func (fss *Provider) Provide(a app.App) error {
 	return nil
 }
 
+// disks adapts api/fs to the app.FileSystem seam. See Provide.
+type disks struct {
+	fm *fs.FileSystem
+}
+
+func (d disks) Disk(name ...string) (app.Disk, error) {
+	return d.fm.Disk(name...)
+}
+
+// Compile-time proof that the adapter still satisfies the seam it is
+// registered under. The signature is the whole subtlety here, so a
+// declaration is the right place to catch it going wrong.
+var _ app.FileSystem = disks{}
+
 func Get(a app.App) *fs.FileSystem {
 	return app.Get[*fs.FileSystem](a)
-	// return a.Service(reflect.TypeOf(&fs.FileSystem{})).(*fs.FileSystem)
 }
 
 // logServedRoot says where stored files are being served from.
