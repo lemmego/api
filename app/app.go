@@ -483,6 +483,24 @@ func (a *application) registerRoutes() {
 	a.router.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	a.router.mux.Handle("GET /public/", http.StripPrefix("/public/", http.FileServer(http.Dir("public"))))
 
+	// The built frontend bundle, which nothing served.
+	//
+	// Vite writes to public/build and lemmego/inertia emits manifest-based
+	// tags under "/build/" (its BuildDir default), so a production page asks
+	// for /build/assets/app-HASH.js — and /public/ does not match it. The
+	// catch-all answered 404 for every asset.
+	//
+	// It could only ever have worked in development, where public/hot exists
+	// and the tags point at the Vite dev server instead: so an Inertia
+	// project was correct under `lemmego dev` and arrived in production with
+	// server-rendered markup, no stylesheet and no hydration. A 200 with a
+	// styled-looking page is what the SSR guard checks for, so nothing in the
+	// stack reported it either.
+	//
+	// Harmless for a project with no frontend build: the directory is absent
+	// and the handler answers 404, exactly as the catch-all did.
+	a.router.mux.Handle("GET /build/", http.StripPrefix("/build/", http.FileServer(http.Dir("public/build"))))
+
 	// Catch-all 404 — unmatched routes render the error page
 	a.router.mux.HandleFunc("/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		ctx := &ctx{app: a, request: r, writer: w, handlers: []Handler{func(_ Context) error { return ErrNotFound }}, index: -1}
