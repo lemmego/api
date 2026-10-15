@@ -39,6 +39,7 @@ const (
 	EnvMaxFiles = "LOG_MAX_FILES"
 	EnvDaily    = "LOG_DAILY"
 	EnvSource   = "LOG_SOURCE"
+	EnvQuiet    = "LOG_QUIET"
 )
 
 // Provider configures slog from the environment and installs it as the
@@ -235,8 +236,16 @@ func (p *Provider) resolve(a app.App, env *environment) log.Options {
 	// record — which is the improvement on app.Run's old approach of
 	// replacing the default logger with a warn-level text handler and losing
 	// the file along with the chatter.
+	//
+	// LOG_QUIET overrides it, because the console/command split is not the
+	// one that matters on a container platform. A worker or a scheduler is a
+	// long-running server that happens to be spelled as a subcommand: it has
+	// no operator reading its output, its whole job is to say what it did,
+	// and the file quiet mode preserves instead lives in an ephemeral
+	// container nobody will ever read. `LOG_QUIET=false` is how such a
+	// process asks for its own voice back.
 	if !opts.Quiet {
-		opts.Quiet = a.RunningInConsole()
+		opts.Quiet = env.boolean(EnvQuiet, a.RunningInConsole())
 	}
 
 	return opts
