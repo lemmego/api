@@ -149,6 +149,12 @@ type HttpResponder interface {
 	XML(v any) error
 	Text(body []byte) error
 	HTML(body []byte) error
+	// Templ renders an a-h/templ component. It sits with the other response
+	// writers because that is what it is; it lived only on the concrete type
+	// until now, which made every documented c.Templ(...) call a compile
+	// error for anyone holding the interface — which is everyone, since
+	// Handler takes a Context.
+	Templ(component templ.Component) error
 	Redirect(url string) error
 	Back() error
 }
