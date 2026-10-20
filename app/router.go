@@ -30,6 +30,18 @@ type route struct {
 	router           *httpRouter
 }
 
+// RouteInfo describes one registered route, for enumeration.
+//
+// Counts rather than the handler slices themselves: a function value tells a
+// reader nothing useful, and exposing the chain would invite callers to depend
+// on an order the router is free to change.
+type RouteInfo struct {
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Handlers    int    `json:"handlers"`
+	Middlewares int    `json:"middlewares"`
+}
+
 type httpRouter struct {
 	routes           []*route
 	httpMiddlewares  []HTTPMiddleware
@@ -139,6 +151,35 @@ func (r *httpRouter) HasRoute(method string, pattern string) bool {
 	})
 }
 
+// Routes reports every route registered through this router, in registration
+// order.
+//
+// HasRoute could already answer "is this one route registered", which is the
+// question a provider asks before adding its own. This answers "what is
+// registered at all", which is the question a person or a tool asks — and
+// until now nothing could, so the only way to see an application's routing
+// table was to read its source.
+//
+// RouteInfo is a copy rather than the live *route: a caller enumerating the
+// table must not be able to rewrite it, and the handler chain is not
+// meaningfully inspectable from outside anyway.
+//
+// Routes registered with Handle or HandleFunc are absent, because they go
+// straight to the ServeMux and this router never sees them. A caller must not
+// read an empty result as "nothing is served".
+func (r *httpRouter) Routes() []RouteInfo {
+	infos := make([]RouteInfo, 0, len(r.routes))
+	for _, route := range r.routes {
+		infos = append(infos, RouteInfo{
+			Method:      route.Method,
+			Path:        route.Path,
+			Handlers:    len(route.Handlers),
+			Middlewares: len(route.BeforeMiddleware) + len(route.AfterMiddleware),
+		})
+	}
+	return infos
+}
+
 func (r *httpRouter) Handle(pattern string, handler http.Handler) {
 	r.mux.Handle(pattern, handler)
 }
@@ -242,6 +283,7 @@ type Router interface {
 	UseBefore(handlers ...Handler)
 	UseAfter(handlers ...Handler)
 	HasRoute(method string, pattern string) bool
+	Routes() []RouteInfo
 	Handle(pattern string, handler http.Handler)
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 	Get(pattern string, handlers ...Handler) *route
