@@ -5,7 +5,10 @@ go 1.27
 require (
 	dario.cat/mergo v1.0.2
 	github.com/a-h/templ v0.3.943
+	github.com/alexedwards/scs/mysqlstore v0.0.0-20251002162104-209de6e426de
+	github.com/alexedwards/scs/postgresstore v0.0.0-20251002162104-209de6e426de
 	github.com/alexedwards/scs/redisstore v0.0.0-20240316134038-7e11d57e8885
+	github.com/alexedwards/scs/sqlite3store v0.0.0-20251002162104-209de6e426de
 	github.com/alexedwards/scs/v2 v2.8.0
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/httplog/v2 v2.1.1

@@ -1,7 +1,7 @@
 // Package session provides HTTP session management for the Lemmego framework.
 //
 // It wraps the scs (Session Cookie Store) library to provide session functionality
-// with support for multiple storage backends including memory, file, and Redis.
+// with support for multiple storage backends including memory, file, Redis and SQL databases.
 // The session system handles secure cookie management and session data persistence.
 package session
 
@@ -21,6 +21,16 @@ const (
 	DriverFile = "file"
 	// DriverRedis uses Redis for session storage
 	DriverRedis = "redis"
+	// DriverDatabase stores sessions in the application's own SQL database,
+	// in a `sessions` table the application migrates itself. The dialect
+	// comes from the registered connection, so this one name covers
+	// Postgres, MySQL and SQLite rather than naming a product.
+	//
+	// It exists because the two durable stores above each cost a deployment
+	// something: file needs a writable volume that outlives the container,
+	// and redis needs a service. An application already running a database
+	// has somewhere durable to put a session and no way to say so.
+	DriverDatabase = "database"
 )
 
 // Session wraps the scs.SessionManager to provide session functionality.

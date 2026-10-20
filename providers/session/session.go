@@ -7,12 +7,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexedwards/scs/mysqlstore"
+	"github.com/alexedwards/scs/postgresstore"
 	"github.com/alexedwards/scs/redisstore"
+	"github.com/alexedwards/scs/sqlite3store"
 	"github.com/alexedwards/scs/v2"
 	"github.com/alexedwards/scs/v2/memstore"
 	"github.com/gomodule/redigo/redis"
 	"github.com/lemmego/api/app"
 	"github.com/lemmego/api/config"
+	"github.com/lemmego/api/db"
 	"github.com/lemmego/api/session"
 )
 
@@ -87,9 +91,53 @@ func (s *Provider) Provide(a app.App) error {
 		}
 		sess = session.New(redisstore.New(pool), cookie)
 
+	case session.DriverDatabase:
+		// Borrowed, never owned: the connector that opened this pool closes
+		// it at shutdown, so the store must not. None of the scs SQL stores
+		// closes the handle it is given, which is what makes borrowing safe.
+		conn, ok := db.Resolve(a)
+		if !ok {
+			// Ordering, almost always: this provider has to be listed after
+			// the connector that registers the connection, because Provide
+			// runs in LoadProviders order and nothing has published a pool
+			// yet. Said plainly, because the alternative symptom is a
+			// signed-out application with a healthy-looking boot.
+			return fmt.Errorf("session: driver %q needs the application's SQL connection, "+
+				"but none is registered — list this provider after the database connector in LoadProviders",
+				session.DriverDatabase)
+		}
+
+		// The dialect decides the store, so the configuration names the
+		// capability and the connection supplies the product. Each store
+		// writes its own SQL and expects its own column types, which is why
+		// this cannot be one store with a dialect argument — and why the
+		// `sessions` table is the application's to migrate, per dialect.
+		//
+		// NewWithCleanupInterval rather than New, so the sweep interval is
+		// this package's decision and not a library default that could
+		// change. Five minutes against a lifetime measured in hours leaves
+		// an expired row for at most a sweep, and costs one indexed DELETE.
+		const cleanupInterval = 5 * time.Minute
+		switch dialect := conn.Dialect(); dialect {
+		case db.Postgres:
+			sess = session.New(postgresstore.NewWithCleanupInterval(conn.SQLDB(), cleanupInterval), cookie)
+		case db.MySQL:
+			sess = session.New(mysqlstore.NewWithCleanupInterval(conn.SQLDB(), cleanupInterval), cookie)
+		case db.SQLite:
+			sess = session.New(sqlite3store.NewWithCleanupInterval(conn.SQLDB(), cleanupInterval), cookie)
+		default:
+			// SQLServer and DialectUnknown land here. Refusing at boot names
+			// the real mistake; the alternative is a store issuing another
+			// dialect's SQL and failing one request at a time.
+			return fmt.Errorf("session: driver %q has no store for the registered connection %q (dialect %q): "+
+				"supported dialects are %q, %q and %q",
+				session.DriverDatabase, conn.Name(), dialect, db.Postgres, db.MySQL, db.SQLite)
+		}
+
 	default:
-		return fmt.Errorf("session: unsupported driver %q (supported: %s, %s, %s)",
-			sessionDriver, session.DriverMemory, session.DriverFile, session.DriverRedis)
+		return fmt.Errorf("session: unsupported driver %q (supported: %s, %s, %s, %s)",
+			sessionDriver, session.DriverMemory, session.DriverFile, session.DriverRedis,
+			session.DriverDatabase)
 	}
 
 	sess.Lifetime = lifetime
