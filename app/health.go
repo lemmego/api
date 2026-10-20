@@ -108,8 +108,20 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	// Create context with timeout for all checks
-	checkTimeout := h.defaultTimeout()
+	// Read the timeout directly rather than through defaultTimeout, which
+	// takes the same RLock.
+	//
+	// Recursive read locking is prohibited: once a writer is waiting on Lock,
+	// sync.RWMutex blocks new readers — so a concurrent RegisterCheck arriving
+	// between these two RLocks deadlocked all three goroutines permanently.
+	// Nothing timed out and nothing logged; the process simply stopped
+	// answering.
+	//
+	// Reachable in any application where one goroutine serves /health while
+	// another registers a check, which is ordinary during boot. It was found
+	// by two MCP tool calls arriving together, because the SDK handles each in
+	// its own goroutine.
+	checkTimeout := h.timeoutLocked()
 	checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
@@ -199,14 +211,23 @@ func (h *HealthChecker) Check(ctx context.Context) *HealthStatus {
 	return healthStatus
 }
 
+// defaultTimeout reports the per-check timeout, taking the lock itself.
+//
+// For callers that do not already hold h.mu. A caller that does must use
+// timeoutLocked: taking RLock twice on one path deadlocks against a waiting
+// writer.
 func (h *HealthChecker) defaultTimeout() time.Duration {
 	h.mu.RLock()
-	timeout := h.timeout
-	h.mu.RUnlock()
-	if timeout <= 0 {
+	defer h.mu.RUnlock()
+	return h.timeoutLocked()
+}
+
+// timeoutLocked reports the per-check timeout. The caller must hold h.mu.
+func (h *HealthChecker) timeoutLocked() time.Duration {
+	if h.timeout <= 0 {
 		return 10 * time.Second
 	}
-	return timeout
+	return h.timeout
 }
 
 // determineStatus determines the overall health status based on check results
