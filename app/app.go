@@ -98,6 +98,11 @@ type AppCore interface {
 	// Router returns the HTTP router for registering routes
 	Router() Router
 
+	// PopulateRoutes invokes the route callbacks so Router().Routes()
+	// reports the routing table, without serving or binding a port. Safe to
+	// call repeatedly.
+	PopulateRoutes()
+
 	// Session returns the session manager instance
 	Session() *session.Session
 
@@ -166,6 +171,7 @@ type application struct {
 	errMap           ErrMap               // Application-level middleware
 	runningInConsole bool                 // True if running as CLI command
 	bootstrapped     bool                 // True if bootstrap phase completed
+	routesPopulated  bool                 // True once the route callbacks have run; see PopulateRoutes
 
 	publishables    []*Publishable   // Assets and files that can be published
 	providers       []Provider       // Service providers for dependency injection
@@ -460,10 +466,45 @@ func (a *application) registerMiddlewares() {
 	}
 }
 
-func (a *application) registerRoutes() {
+// PopulateRoutes invokes the route callbacks so Router().Routes() reports the
+// application's routing table, without installing handlers on the mux, binding
+// a port, or re-running providers.
+//
+// It exists because the table was only ever built on the way to serving HTTP:
+// registerRoutes runs from serveHandler, so a console command saw an empty
+// router however many routes the application serves. Anything that wants to
+// *read* the table — a `routes` command, lemmego/mcp's list-routes — had no way
+// to get it.
+//
+// Handler() is not the answer for an already-booted application, which is the
+// mistake this method replaces: Handler re-runs registerProviders, and a
+// provider that registers a service panics with "service already registered"
+// the second time. Handler is for an application that has not been booted.
+//
+// Safe to call more than once, and safe to call before serving: the callbacks
+// run at most once for the life of the application, so a later serveHandler
+// reuses what this built rather than registering everything twice.
+func (a *application) PopulateRoutes() {
+	a.runRouteCallbacks()
+}
+
+// runRouteCallbacks invokes the route callbacks exactly once.
+//
+// Guarded because the callbacks append to a.router.routes, so running them
+// twice would double every route — and the second registration would also hit
+// the mux, where re-registering a pattern panics.
+func (a *application) runRouteCallbacks() {
+	if a.routesPopulated {
+		return
+	}
+	a.routesPopulated = true
 	for _, cb := range a.routeCallbacks {
 		cb(a)
 	}
+}
+
+func (a *application) registerRoutes() {
+	a.runRouteCallbacks()
 
 	// Register the default before routes are copied into the mux.
 	if !a.router.HasRoute("GET", "/error") {
