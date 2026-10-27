@@ -86,33 +86,23 @@ func resolve(name string) (fsys.FS, error) {
 		driver = "local"
 	}
 
-	setting := func(key string) string {
-		value, _ := conf[key].(string)
-		return value
+	// Every string under the disk's configuration is handed to the driver,
+	// which reads the keys it knows. This package therefore needs to know
+	// nothing about what a driver wants — which is what lets the cloud
+	// drivers live in their own packages and keep their SDKs out of here.
+	settings := fsys.Settings{}
+	for key, value := range conf {
+		if text, ok := value.(string); ok {
+			settings[key] = text
+		}
+	}
+	if driver == fsys.DRIVER_LOCAL && settings.Get("path") == "" {
+		settings["path"] = defaultLocalPath
 	}
 
-	switch driver {
-	case "local":
-		path := setting("path")
-		if path == "" {
-			path = defaultLocalPath
-		}
-		return fsys.NewLocalStorage(path), nil
-
-	case "s3":
-		store, err := fsys.NewS3Storage(
-			setting("bucket"),
-			setting("region"),
-			setting("key"),
-			setting("secret"),
-			setting("endpoint"),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("fs: building the %q disk: %w", name, err)
-		}
-		return store, nil
-
-	default:
-		return nil, fmt.Errorf("fs: disk %q has unsupported driver %q (supported: local, s3)", name, driver)
+	disk, err := fsys.Open(driver, settings)
+	if err != nil {
+		return nil, fmt.Errorf("fs: building the %q disk: %w", name, err)
 	}
+	return disk, nil
 }
