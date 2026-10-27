@@ -838,8 +838,18 @@ func (a *application) shutDown() {
 		slog.Error("error shutting down event emitter", "error", err)
 	}
 
-	// Shutdown providers that implement ShutdownProvider
-	for _, provider := range a.providers {
+	// Shut providers down in reverse, because that is the order their
+	// dependencies allow.
+	//
+	// LoadProviders is ordered so a provider comes after whatever it borrows
+	// — the connector before anything using its connection, the cache before
+	// a limiter over it. Tearing down in the same order closes the borrowed
+	// thing first, so the borrower's Shutdown runs against a closed pool. It
+	// is invisible for a provider that frees only its own state, and loses
+	// data for one that has anything to flush: lemmego/observe found this by
+	// reporting "sql: database is closed" while draining its last batch.
+	for i := len(a.providers) - 1; i >= 0; i-- {
+		provider := a.providers[i]
 		if shutdownProvider, ok := provider.(ShutdownProvider); ok {
 			if err := shutdownProvider.Shutdown(shutdownCtx); err != nil {
 				slog.Error("error shutting down provider", "provider", fmt.Sprintf("%T", provider), "error", err)

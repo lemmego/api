@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -169,5 +170,52 @@ func TestDefaultErrorRouteIsRegisteredAndEscapesMessage(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "<script>") {
 		t.Fatalf("default error route was not safely rendered: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// recordingShutdown notes the order it was torn down in.
+type recordingShutdown struct {
+	name  string
+	order *[]string
+}
+
+func (r *recordingShutdown) Provide(App) error { return nil }
+
+func (r *recordingShutdown) Shutdown(context.Context) error {
+	*r.order = append(*r.order, r.name)
+	return nil
+}
+
+// TestProvidersShutDownInReverse.
+//
+// LoadProviders is ordered so a provider comes after whatever it borrows.
+// Tearing down in the same order closes the borrowed thing first, so the
+// borrower's Shutdown runs against a closed pool — invisible for a provider
+// that frees only its own state, and lossy for one with anything to flush.
+func TestProvidersShutDownInReverse(t *testing.T) {
+	var order []string
+
+	engine := Configure(WithProviders([]Provider{
+		&recordingShutdown{name: "connector", order: &order},
+		&recordingShutdown{name: "queue", order: &order},
+		&recordingShutdown{name: "observe", order: &order},
+	}))
+
+	a, ok := engine.(*application)
+	if !ok {
+		t.Fatalf("Configure returned %T, want *application", engine)
+	}
+	a.shutDown()
+
+	want := []string{"observe", "queue", "connector"}
+	if len(order) != len(want) {
+		t.Fatalf("shut down %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("shut down %v, want %v — a provider that borrows the "+
+				"connection is being torn down after the connector closed it",
+				order, want)
+		}
 	}
 }
