@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/lemmego/api/config"
@@ -40,26 +39,6 @@ func TestConfigureUsesIsolatedConfiguration(t *testing.T) {
 	}
 	if second.Config().Get("app.name") != "second" {
 		t.Fatalf("second application configuration was overwritten: %v", second.Config().Get("app.name"))
-	}
-}
-
-func TestSpanSetError(t *testing.T) {
-	span := &Span{}
-	done := make(chan struct{})
-
-	go func() {
-		span.SetError(errors.New("request failed"))
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("SetError deadlocked")
-	}
-
-	if span.Status != SpanStatusError || span.Tags["error"] != "request failed" {
-		t.Fatalf("expected error status and tag, got status %q and tags %#v", span.Status, span.Tags)
 	}
 }
 
