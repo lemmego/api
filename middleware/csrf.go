@@ -155,9 +155,9 @@ func VerifyCSRF(opts *CSRFOpts) app.Handler {
 		}
 
 		if c.IsReading() || matchedToken(c) {
-			// Refresh the cookie on every response, not only HTML ones. An XHR
-			// navigation that skipped it used to leave the client with nothing
-			// to send on the next write.
+			// Refresh the cookie on every response, not only HTML ones.
+			// Skipping it on an XHR navigation leaves the client with no
+			// token to send on the next write.
 			if !strings.HasPrefix(c.Request().URL.Path, "/static") {
 				token := ""
 				if val, ok := c.Session("_token").(string); ok && val != "" {

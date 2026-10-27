@@ -667,9 +667,9 @@ func (a *application) serveHandler() http.Handler {
 	// An application without session.Provider has no session to load, and
 	// that is a legitimate configuration — a pure JSON API has no cookie jar.
 	// Session() resolves through Get, which panics on an unregistered
-	// service, so this used to take the process down at boot with "service
-	// *session.Session is not registered" rather than serving the API it was
-	// configured to serve.
+	// service, so resolving it unconditionally here would take the process
+	// down at boot with "service *session.Session is not registered" rather
+	// than serving the API it was configured to serve. Hence Lookup.
 	if sess, ok := Lookup[*session.Session](a); ok && sess != nil {
 		return sess.LoadAndSave(a.router)
 	}
@@ -709,13 +709,12 @@ func (a *application) Run() {
 
 	// Quietening a command's logs is logger.Provider's job, not this one's.
 	//
-	// This used to replace the default logger with a warn-level text handler
-	// when the process was a CLI command, which did suppress info chatter and
-	// also discarded whatever the application had configured — a second owner
-	// of slog.SetDefault, deciding by an ordering nobody controlled. The
-	// provider reads RunningInConsole itself and raises only the console,
-	// leaving the file at full level, so a command that fails overnight still
-	// leaves a record.
+	// Installing a warn-level handler here for a CLI command would suppress
+	// info chatter and also discard whatever the application configured,
+	// making this a second owner of slog.SetDefault that wins or loses by an
+	// ordering nobody controls. The provider reads RunningInConsole itself
+	// and raises only the console, leaving the file at full level, so a
+	// command that fails overnight still leaves a record.
 
 	// Register providers — this also collects commands, routes, middlewares, etc.
 	a.Dispatch(ServicesRegistering)

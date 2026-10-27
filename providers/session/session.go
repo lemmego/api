@@ -29,8 +29,8 @@ type Provider struct {
 const defaultSessionFiles = "./storage/session"
 
 // Default Redis connection settings, used when the keyvalue configuration is
-// absent. A project scaffolded without Redis has no such section, and
-// SESSION_DRIVER=redis in that project used to panic on the first request that
+// absent. A project scaffolded without Redis has no such section, so
+// SESSION_DRIVER=redis there would otherwise panic on the first request that
 // touched the session rather than failing anywhere useful.
 const (
 	defaultRedisHost = "localhost"

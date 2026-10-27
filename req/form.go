@@ -22,14 +22,14 @@ const maxMultipartMemory = 32 << 20 // 32 MiB
 // FieldName returns the form field a struct field binds to, from either tag
 // vocabulary, and whether it binds at all.
 //
-// Two vocabularies exist because two binders did: `form:"name"` is what this
-// package reads and what `lemmego g input` used to generate; `in:"form=name"`
-// is httpin's, which the generator emitted for a while. Supporting both here
-// is what let httpin be removed without a sweep of every project — and the
-// reason it had to go is that the two binders disagreed in ways nobody could
-// see from a struct: on which array shapes bind, on whether a checkbox's
-// `on` is true, and on whether files bind at all. A single struct tag decided
-// which set of answers an input got.
+// Two vocabularies are accepted because two binders were once in play:
+// `form:"name"`, which this package reads, and `in:"form=name"`, httpin's,
+// which `lemmego g input` emitted for a time. Reading both means a project
+// carrying either tag binds without a sweep.
+//
+// There is one binder now, which matters more than the tags: two disagree in
+// ways a struct does not show — about which array shapes bind, whether a
+// checkbox's `on` is true, and whether files bind at all.
 //
 // `-` means "never bind this", as it does for encoding/json.
 func FieldName(field reflect.StructField) (string, bool) {
@@ -112,13 +112,12 @@ func DecodeForm(r *http.Request, inputStruct any) error {
 		// A file is not a form value: it lives in MultipartForm.File, not in
 		// the value map, so it is bound from there.
 		//
-		// This used to `continue`, on the grounds that a file is read through
-		// FormFile later. The effect was that a struct declaring
-		// `Images []*multipart.FileHeader` was handed an empty slice on every
-		// request — and a handler that reasonably writes
-		// `if len(input.Images) == 0 { return nil, nil }` then accepted the
-		// upload, returned success, and attached nothing. Silent, and on the
-		// happy path.
+		// Skipping it here, on the grounds that FormFile reads files later,
+		// hands a struct declaring `Images []*multipart.FileHeader` an empty
+		// slice on every request. A handler that then writes
+		// `if len(input.Images) == 0 { return nil, nil }` accepts the upload,
+		// returns success and attaches nothing — silently, on the happy
+		// path.
 		if isFileField(field.Type) {
 			if err := setFileField(r, target.Field(i), name); err != nil {
 				return fmt.Errorf("req: %s: %w", name, err)
@@ -360,11 +359,10 @@ func setScalar(field reflect.Value, raw string) error {
 		}
 		field.SetFloat(parsed)
 	default:
-		// Anything else is reported rather than skipped. It used to return
-		// nil, so a field of a type this function did not know — a time.Time,
-		// say — bound to its zero value with nothing said: the request
-		// succeeded and the date was 0001-01-01. A binder that cannot bind a
-		// field has to say so.
+		// Anything else is reported rather than skipped. Returning nil would
+		// leave a field of an unknown type — a time.Time, say — at its zero
+		// value with nothing said, so the request succeeds and the date is
+		// 0001-01-01. A binder that cannot bind a field has to say so.
 		return fmt.Errorf("cannot bind %q into a %s", raw, field.Type())
 	}
 	return nil

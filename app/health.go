@@ -436,9 +436,9 @@ func (a *application) GetHealthChecker() *HealthChecker {
 // Checks run in their own goroutines, so a panic in one is not reached by the
 // HTTP recovery middleware and takes the whole process down — an endpoint that
 // exists to report that something is wrong killing the server instead. The two
-// built-in checks used to do exactly that on an application with no filesystem
-// or session registered, because they resolved the service before testing
-// whether it was there.
+// built-in checks therefore test whether a service is registered before
+// resolving it; resolving first panics on an application that has no
+// filesystem or session.
 func runCheck(ctx context.Context, check func(context.Context) error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {

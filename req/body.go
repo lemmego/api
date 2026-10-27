@@ -31,11 +31,10 @@ const (
 
 // KindOf reports how a request's body should be read.
 //
-// From the Content-Type and nothing else. It used to depend partly on which
-// struct tags the target declared, which meant the same request was parsed
-// two different ways depending on what it was being parsed into — and the two
-// parsers disagreed about enough that the difference was only ever found in
-// production.
+// From the Content-Type and nothing else. Letting the target's struct tags
+// influence it would parse the same request two different ways depending on
+// what it was being parsed into, and two parsers disagree in ways a struct
+// does not show.
 //
 // A suffixed type counts: `application/vnd.api+json` is JSON, and
 // `application/atom+xml` is XML. An unknown type is a form, which is what the

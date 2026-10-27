@@ -894,12 +894,10 @@ func (f *vField) ImageDimensions(minWidth, minHeight, maxWidth, maxHeight int) *
 // file is acceptable. Failing here as well would report two errors for one
 // missing field.
 //
-// It used to answer with the first file alone, so on a multi-file field every
-// rule checked one attachment and waved the rest through: four files where
-// only the first is a PNG passed FileTypes, and the HTML one behind it was
-// stored and later served from the application's own origin. That is the
-// shape of failure this package keeps turning up — the request succeeds and
-// the check did nothing — so the rules run over all of them.
+// It answers with every file, not the first. Returning one would have each
+// rule check a single attachment and wave the rest through: four files where
+// only the first is a PNG would pass FileTypes, and the HTML one behind it
+// would be stored and later served from the application's own origin.
 func (f *vField) uploadHeaders() ([]*multipart.FileHeader, bool) {
 	switch value := f.value.(type) {
 	case *multipart.FileHeader:

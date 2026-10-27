@@ -260,12 +260,12 @@ func HasJSON(r *http.Request) bool {
 // Which one runs is decided by the Content-Type and never by which tags the
 // target happens to carry.
 //
-// This used to fall through to httpin for the second case unless the struct
-// declared a `form:` tag, which made a single character on one field decide
-// which of two binders an input got — and they disagreed about which array
-// shapes bind, whether a checkbox's `on` is true, and whether files bind at
-// all. Every one of those differences was found the same way: something was
-// dropped in silence and a request answered 302.
+// That rule is what keeps binding predictable. If a struct tag chose the
+// binder instead, a single character on one field would decide which of two
+// sets of answers an input got — about which array shapes bind, whether a
+// checkbox's `on` is true, and whether files bind at all — and each
+// difference shows up as a value dropped in silence while the request answers
+// 302.
 func ParseInput(rr RequestResponder, inputStruct any) error {
 	switch KindOf(rr.Request()) {
 	case BodyJSON:

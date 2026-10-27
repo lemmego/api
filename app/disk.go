@@ -9,15 +9,15 @@ import (
 // Disk is one storage backend, and FileSystem resolves disks by name.
 //
 // These are declared here rather than imported, and the reason is measured
-// rather than stylistic. The App interface used to return *fs.FileSystem, and
-// Context.disk returned fsys.FS, so the core imported lemmego/fsys — which
-// serves local, S3 and GCS from a single package, and therefore links the AWS
-// SDK and seven cloud.google.com modules. `go list -deps ./api/app` was 773
+// rather than stylistic. Returning *fs.FileSystem from the App interface, or
+// fsys.FS from Context.disk, makes the core import lemmego/fsys — which serves
+// local, S3 and GCS from a single package, and so links the AWS SDK and seven
+// cloud.google.com modules. That put `go list -deps ./api/app` at 773
 // packages, 81 of them cloud SDKs, plus nine OpenTelemetry modules and three
 // SQL drivers, for a framework whose core formats HTTP responses.
 //
-// That is the cost every consumer of this package paid, whether or not it ever
-// wrote a file, and it is the same mistake lemmego/log already recorded: with
+// Every consumer of this package pays that, whether or not it ever writes a
+// file, and it is the same trap lemmego/log already recorded: with
 // its provider inside the module, importing the core dragged in 289 modules
 // for a package that formats text. media/deps_test.go goes further and
 // *refuses* to depend on fsys by name, for exactly this reason — so the core
