@@ -71,11 +71,9 @@ const defaultLocalPath = "./storage"
 
 // resolve builds the named disk.
 //
-// Every configuration read here is guarded. It previously asserted the disk
-// map and five S3 settings without checking, so an application with no
-// filesystems section — or an S3 disk missing a key — took the process down on
-// the first upload. A disk that cannot be built is now an error the caller can
-// report.
+// Every configuration read here is guarded, so an application with no
+// filesystems section, or an S3 disk missing a key, gets an error the caller
+// can report rather than a panic on the first upload.
 func resolve(name string) (fsys.FS, error) {
 	disks, _ := config.Get("filesystems.disks").(config.M)
 	conf, _ := disks[name].(config.M)

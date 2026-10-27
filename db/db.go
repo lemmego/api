@@ -1,24 +1,23 @@
 // Package db declares the seam between whatever opened the application's SQL
 // connection and every framework package that needs to store something in it.
 //
-// The problem it solves is that there was no single place to ask. The service
-// container keys on a concrete type, so resolving "the database" meant naming
-// *orm.DB or *gorm.DB or *bun.DB at compile time; the GPA registry keys on a
-// vendor string ("GORM", "Bun"), is off by default, and cannot hand out a
-// repository through an interface anyway. A framework package needing a table
-// therefore had to re-derive a DSN from configuration and open its own pool,
-// which is how the queue ended up running against a different database from
-// the rest of the application and losing every job on restart.
+// Use it when a package needs its own tables and cannot know which SQL layer
+// the application chose. The service container keys on a concrete type, so
+// resolving "the database" would mean naming *orm.DB, *gorm.DB or *bun.DB at
+// compile time; the GPA registry keys on a vendor string, is off by default,
+// and cannot hand out a repository through an interface. Without this seam the
+// remaining option is to re-derive a DSN from configuration and open a second
+// pool, which silently puts the package on a different database from the rest
+// of the application.
 //
 // Exactly one connector registers a Connection during bootstrap; everything
 // else asks Resolve. An application with no database at all is normal and
 // supported: Resolve reports false and nothing panics.
 //
-// The seam is deliberately narrow. It answers "which pool, and what dialect",
+// The seam is narrow on purpose. It answers "which pool, and what dialect",
 // and nothing else. Quoting, upserts and RETURNING belong to orm.Dialect and
-// to the queue's own dialect layer, which are different interfaces serving
-// different needs; unifying them here would turn this into a SQL-generation
-// library that serves neither well.
+// to the queue's own dialect layer; unifying them here would turn this into a
+// SQL-generation library.
 package db
 
 import (

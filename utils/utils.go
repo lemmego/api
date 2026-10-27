@@ -70,9 +70,8 @@ func StructToMap(obj interface{}) (map[string]interface{}, error) {
 // The paths below say where generated code goes. They are read from the
 // application's config, which a project may not have loaded — the generators
 // run outside a project too — so each falls back to the conventional location
-// rather than asserting. They previously asserted the value straight out of
-// the config and panicked when the app section was absent or a key was
-// missing.
+// rather than asserting, so a missing app section or key yields the
+// convention instead of a panic.
 func projectPath(key, fallback string) string {
 	if value, ok := config.Get("app." + key).(string); ok && value != "" {
 		return value

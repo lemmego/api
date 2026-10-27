@@ -107,8 +107,8 @@ func countRows(a app.App, table, column string, value any, except ...any) (int, 
 //
 // A table or column name cannot be a bind parameter in any dialect, so it is
 // interpolated — which means this is the only thing standing between a
-// mistaken caller and an injection. It is deliberately strict: letters,
-// digits and underscores, not starting with a digit.
+// mistaken caller and an injection. It is strict by design: letters, digits
+// and underscores, not starting with a digit.
 func validIdentifier(name string) error {
 	if name == "" {
 		return ErrBadIdentifier

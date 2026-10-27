@@ -5,12 +5,11 @@
 // string on a request that has no body. Which one runs is decided by the
 // Content-Type, never by a struct tag.
 //
-// That last point is the whole design. There used to be two form binders,
-// this one and httpin's, and a single tag on a single field decided which an
-// input got. They disagreed about which array shapes bind, about whether a
-// checkbox's `on` is true, and about whether files bind at all — and every
-// one of those differences was discovered the same way, by something being
-// dropped in silence while the request answered success.
+// That last point matters: with one binder per body shape, a field binds the
+// same way whatever tags it carries. Two binders chosen by tag would disagree
+// about which array shapes bind, whether a checkbox's `on` is true, and
+// whether files bind at all — and each disagreement shows up as a value
+// silently dropped while the request reports success.
 package req
 
 import (

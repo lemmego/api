@@ -22,8 +22,8 @@ type ServeOptions struct {
 	// Dirs are the directories inside the disk that may be served. Nothing
 	// else is reachable.
 	//
-	// There is deliberately no "serve the whole disk" option, and this is the
-	// reason: a disk's root holds whatever the application put there. In a
+	// There is no "serve the whole disk" option, and this is why: a disk's
+	// root holds whatever the application put there. In a
 	// scaffolded project that is storage/logs, storage/session and
 	// storage/database.sqlite sitting beside the uploads — and the log is
 	// where mail is written outside production, which is to say it holds live

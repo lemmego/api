@@ -24,12 +24,10 @@ type M map[string]any
 // expected type, the caller's default when one was given, and otherwise the
 // zero value.
 //
-// That last case used to be an index-out-of-range panic: the default is
-// variadic and was read as defaultVal[0] without checking that one was passed.
 // Reading a key that is not there is the ordinary case for optional
-// configuration — a feature the user did not enable — so it returns a zero
-// rather than taking the process down. Use Lookup when you need to tell an
-// absent key from one holding a zero.
+// configuration — a feature the application did not enable — so it returns a
+// zero rather than failing. Use Lookup when you need to tell an absent key
+// from one holding a zero value.
 
 func firstOr[T any](defaults []T) T {
 	if len(defaults) > 0 {

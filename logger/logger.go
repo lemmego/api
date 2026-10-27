@@ -14,9 +14,9 @@
 //	    }
 //	}
 //
-// After that, slog is the API. There is deliberately no logger.Info: a
-// package that logs should import log/slog and nothing else, so it can be
-// used outside an application too.
+// After that, slog is the API. There is no logger.Info, so a package that
+// logs can import log/slog and nothing else — which keeps it usable outside
+// an application too.
 package logger
 
 import (
@@ -52,12 +52,9 @@ const (
 // down the list; the boot records just go somewhere else, which is confusing
 // in exactly the situation you are reading logs to understand.
 //
-// It is the single owner of slog.SetDefault. That used to be shared: this
-// package installed a logger from init() at import time, and app.Run
-// installed a second one for CLI commands, so the effective logger depended
-// on an ordering nobody controlled and the loser's configuration was
-// discarded in silence. Console quietening is a field on log.Options now —
-// see resolve — so the intent survives with one owner instead of two.
+// It is the single owner of slog.SetDefault, so there is one answer to which
+// logger is installed. To quieten the console for a CLI command, set the
+// field on log.Options rather than installing a second logger — see resolve.
 type Provider struct {
 	// Options overrides the environment. A zero field falls back to the
 	// environment, then to the documented default, so a project that wants
@@ -98,7 +95,7 @@ func (p *Provider) Provide(a app.App) error {
 	return nil
 }
 
-// Deliberately not a ShutdownProvider.
+// Not a ShutdownProvider, for two reasons.
 //
 // Closing the file at shutdown looks tidy and is worse twice over. Nothing is
 // buffered — the rotator and the console handler each write a whole record

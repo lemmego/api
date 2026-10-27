@@ -44,10 +44,9 @@ type Publishable struct {
 // Publish writes the file unless it already exists, reporting whether it
 // wrote.
 //
-// The bool matters: a skip used to be indistinguishable from a write, both
-// returning a nil error and logging nothing, so someone who had published
-// once and then upgraded had no way to tell that the new version of a file
-// had not arrived.
+// Check the bool rather than only the error. A file that already exists is
+// skipped with a nil error, so without it an upgrade that did not deliver a
+// new version of a file looks identical to one that did.
 func (p *Publishable) Publish() (bool, error) {
 	if _, err := os.Stat(p.FilePath); err == nil {
 		return false, nil
@@ -108,9 +107,9 @@ func publish(publishables []*Publishable) *cobra.Command {
 			}
 		}
 
-		// --tags used to be decorative: a tag that did not match still fell
-		// through to an else branch that published the file anyway, so the
-		// flag narrowed nothing.
+		// A file whose tag does not match the --tags filter is skipped
+		// entirely, so the flag selects what gets published rather than
+		// merely ordering it.
 		if len(tags) > 0 {
 			available := publishableTags(publishables)
 			for _, tag := range tags {

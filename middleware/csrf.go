@@ -57,7 +57,7 @@ func getRandomToken(length int) string {
 
 // matchedToken reports whether the request carries the session's CSRF token.
 //
-// It deliberately does not rotate the token. Rotating on every verified
+// It does not rotate the token, and that is intended. Rotating on every verified
 // request means any client that reuses a token — one that missed a Set-Cookie,
 // had a request already in flight, was restored from the back/forward cache,
 // or is a second tab — is rejected with 419, and stays rejected until a full
@@ -197,10 +197,9 @@ func VerifyCSRF(opts *CSRFOpts) app.Handler {
 // configuration does not say.
 const defaultCSRFCookieLifetime = 2 * time.Hour
 
-// csrfCookieLifetime reads the session lifetime, which was previously asserted
-// straight out of the configuration — so a project whose session config was
-// absent, or that spelled the lifetime as a number of seconds rather than a
-// duration, panicked on the first request that set the token cookie.
+// csrfCookieLifetime reads the session lifetime, tolerating a missing session
+// section and a lifetime given either as a duration or as a number of
+// seconds, so neither panics on the first request that sets the token cookie.
 func csrfCookieLifetime() time.Duration {
 	switch value := config.Get("session.lifetime").(type) {
 	case time.Duration:

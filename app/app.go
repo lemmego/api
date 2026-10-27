@@ -195,13 +195,13 @@ func (a *application) On(event string, listener EventListener) {
 
 // Dispatch delivers an event to its listeners.
 //
-// A single payload is passed through as itself. It used to be forwarded as the
-// whole variadic slice, so a listener registered for one value received
-// []any{value} and every type assertion against it failed — including the one
-// behind cache's event bridge, which has therefore been dispatching a payload
-// nobody could read since it shipped. Nothing compensated for it, because
-// nothing in the monorepo registers a listener at all, and the existing tests
-// call eventRegistry.Dispatch directly and so never cross this wrapper.
+// A single payload reaches a listener as itself, so a listener registered for
+// one value can assert its type directly. Several payloads reach it as
+// []any.
+//
+// Listeners run synchronously on the calling goroutine, in registration
+// order, and a listener's error is logged rather than returned — so anything
+// slow belongs on a queue rather than in a listener.
 func (a *application) Dispatch(event string, payload ...any) {
 	switch len(payload) {
 	case 0:
@@ -690,8 +690,8 @@ func (a *application) Handler() http.Handler {
 	a.registerProviders()
 	a.Dispatch(ServicesRegistered)
 
-	// Deliberately not publishing here. publish writes files into the project
-	// directory, which a test must not do as a side effect of booting.
+	// Not publishing here: publish writes files into the project directory,
+	// which a test must not do as a side effect of booting.
 
 	return a.serveHandler()
 }
