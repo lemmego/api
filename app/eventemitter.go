@@ -34,11 +34,31 @@ const (
 	ServerStopping = "server.stopping"
 )
 
-type EventListener func(payload any) error
+// EventListener receives one dispatched event.
+//
+// It is handed the context of whatever dispatched it, which is what makes an
+// event attributable: a listener — or something watching the emitter —
+// correlates an event to the request that caused it by reading a request id
+// out of that context. An event dispatched from boot or shutdown, where there
+// is no request, carries context.Background rather than nil.
+//
+// The error is logged and does not reach the dispatcher, and the remaining
+// listeners still run. That is deliberate and it is the limit of what this
+// emitter is for: it announces, it does not coordinate. Work that must
+// succeed does not belong in a listener.
+type EventListener func(ctx context.Context, payload any) error
 
 type EventEmitter interface {
 	On(event string, listener EventListener)
+
+	// Dispatch delivers an event with no context, for a caller that has
+	// none — boot, shutdown, a command.
 	Dispatch(event string, payload ...any)
+
+	// DispatchContext delivers an event with the caller's context, so a
+	// listener and an observer can attribute it. Prefer it anywhere a
+	// context is in hand.
+	DispatchContext(ctx context.Context, event string, payload ...any)
 }
 
 type eventRegistry struct {
@@ -55,7 +75,7 @@ func newEventRegistry() *eventRegistry {
 	}
 }
 
-func (r *eventRegistry) Dispatch(event string, payload any) {
+func (r *eventRegistry) Dispatch(ctx context.Context, event string, payload any) {
 	r.shutdownMu.Lock()
 	shutdown := r.shutdown
 	r.shutdownMu.Unlock()
@@ -65,13 +85,38 @@ func (r *eventRegistry) Dispatch(event string, payload any) {
 		return
 	}
 
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	r.mu.RLock()
 	listeners := append([]EventListener(nil), r.events[event]...)
 	r.mu.RUnlock()
 	for _, listener := range listeners {
-		if err := listener(payload); err != nil {
-			slog.Error(err.Error())
+		deliver(ctx, event, listener, payload)
+	}
+}
+
+// deliver runs one listener, containing its panic.
+//
+// Without this, a listener registered by a plugin can take down whatever
+// dispatched the event — which for ServerStopping is the shutdown itself, and
+// for anything dispatched during a request is the request. Every other
+// listener seam in this framework recovers; this one did not, and it is the
+// one a third party is most likely to register against.
+//
+// The panic is logged at error level and the remaining listeners still run,
+// which is the same contract the returned error already has: this emitter
+// announces, it does not coordinate.
+func deliver(ctx context.Context, event string, listener EventListener, payload any) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.ErrorContext(ctx, "an event listener panicked",
+				"event", event, "panic", recovered)
 		}
+	}()
+	if err := listener(ctx, payload); err != nil {
+		slog.ErrorContext(ctx, err.Error(), "event", event)
 	}
 }
 

@@ -43,6 +43,12 @@ func NewTemplate(ctx app.Context, fileName string) *Template {
 	return &Template{File: fileName, ctx: ctx}
 }
 
+// ViewName satisfies app.ViewNamer, so a render observer reports the template
+// file rather than "*res.Template" on every page.
+func (t *Template) ViewName() string { return t.File }
+
+var _ app.ViewNamer = (*Template)(nil)
+
 func (t *Template) WithData(data map[string]any) *Template {
 	t.data = data
 	return t

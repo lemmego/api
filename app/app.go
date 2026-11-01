@@ -193,23 +193,34 @@ func (a *application) On(event string, listener EventListener) {
 	a.eventRegistry.On(event, listener)
 }
 
-// Dispatch delivers an event to its listeners.
+// Dispatch delivers an event to its listeners with no context.
+//
+// For a caller that has one — a handler, a service, anything inside a
+// request — DispatchContext is the one to use: without it a listener cannot
+// tell which request caused the event, and neither can anything watching the
+// emitter.
+func (a *application) Dispatch(event string, payload ...any) {
+	a.DispatchContext(context.Background(), event, payload...)
+}
+
+// DispatchContext delivers an event to its listeners.
 //
 // A single payload reaches a listener as itself, so a listener registered for
 // one value can assert its type directly. Several payloads reach it as
 // []any.
 //
 // Listeners run synchronously on the calling goroutine, in registration
-// order, and a listener's error is logged rather than returned — so anything
-// slow belongs on a queue rather than in a listener.
-func (a *application) Dispatch(event string, payload ...any) {
+// order. A listener's error is logged rather than returned, and a listener's
+// panic is contained — so anything slow belongs on a queue rather than in a
+// listener, and anything that must succeed does not belong in one at all.
+func (a *application) DispatchContext(ctx context.Context, event string, payload ...any) {
 	switch len(payload) {
 	case 0:
-		a.eventRegistry.Dispatch(event, nil)
+		a.eventRegistry.Dispatch(ctx, event, nil)
 	case 1:
-		a.eventRegistry.Dispatch(event, payload[0])
+		a.eventRegistry.Dispatch(ctx, event, payload[0])
 	default:
-		a.eventRegistry.Dispatch(event, payload)
+		a.eventRegistry.Dispatch(ctx, event, payload)
 	}
 }
 

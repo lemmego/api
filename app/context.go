@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/lemmego/api/shared"
@@ -334,7 +335,12 @@ func (c *ctx) Render(r Renderer) error {
 	if c.status != 0 {
 		c.writer.WriteHeader(c.status)
 	}
-	return r.Render(c.ResponseWriter())
+	started := time.Now()
+	err := r.Render(c.ResponseWriter())
+	// Reported after the body is written, because a render's duration and
+	// its error are what a view panel is for and neither is known before.
+	renderObserved(c.RequestContext(), r, nil, c.status, time.Since(started), err)
+	return err
 }
 
 func (c *ctx) App() App {
@@ -359,7 +365,14 @@ func (c *ctx) Templ(component templ.Component) error {
 		c.status = http.StatusOK
 	}
 	c.writer.WriteHeader(c.status)
-	return component.Render(c.Request().Context(), c.writer)
+	started := time.Now()
+	err := component.Render(c.Request().Context(), c.writer)
+	// Observed here too, and not only in Render. This is a second view path
+	// — it takes a component rather than a Renderer and never reaches
+	// Render — so a view panel built on Render alone would be silently blind
+	// to every page an application renders this way.
+	renderObserved(c.RequestContext(), nil, component, c.status, time.Since(started), err)
+	return err
 }
 
 func (c *ctx) SetStatus(code int) HttpResponder {
