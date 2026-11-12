@@ -105,6 +105,17 @@ func (c tokenContext) Get(key string) any { return c.values[key] }
 
 func (c tokenContext) PopSession(string) any { return nil }
 
+// T and Locale have to be here rather than promoted from the embedded nil
+// app.Context, because Render calls T to bind the t and choice template
+// functions and a promoted method on a nil interface panics. That is the cost
+// of widening app.Context, and it falls on any double built this way.
+//
+// nil is the honest answer: no translator is registered, which Render reads
+// as "use the framework's own English".
+func (c tokenContext) T() app.Translator { return nil }
+
+func (c tokenContext) Locale() string { return "" }
+
 // Every form that posts needs the CSRF token in a hidden _token field.
 // Requiring each handler to pass it through by hand means forgetting it shows
 // up as a 419 at submit time rather than as anything visible while building

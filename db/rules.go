@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/lemmego/api/app"
 )
@@ -32,10 +31,10 @@ func Unique(a app.App, table, column string, except ...any) func(any) (bool, str
 	return func(value any) (bool, string, error) {
 		found, err := countRows(a, table, column, value, except...)
 		if err != nil {
-			return false, "This value could not be checked", err
+			return false, "validation.uncheckable", err
 		}
 		if found > 0 {
-			return false, "This " + humanise(column) + " is already taken", nil
+			return false, "validation.unique", nil
 		}
 		return true, "", nil
 	}
@@ -47,10 +46,10 @@ func Exists(a app.App, table, column string) func(any) (bool, string, error) {
 	return func(value any) (bool, string, error) {
 		found, err := countRows(a, table, column, value)
 		if err != nil {
-			return false, "This value could not be checked", err
+			return false, "validation.uncheckable", err
 		}
 		if found == 0 {
-			return false, "This " + humanise(column) + " does not exist", nil
+			return false, "validation.exists", nil
 		}
 		return true, "", nil
 	}
@@ -134,11 +133,6 @@ func quoteIdentifier(d Dialect, name string) string {
 	default:
 		return `"` + name + `"`
 	}
-}
-
-// humanise turns a column name into something a message can show.
-func humanise(column string) string {
-	return strings.ReplaceAll(column, "_", " ")
 }
 
 // ErrNoConnection means no database connection is registered, so nothing can

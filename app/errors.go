@@ -23,6 +23,29 @@ type HttpMessage struct {
 	Message string
 }
 
+// defaultHTTPMessage is the text each sentinel above carries, keyed by status.
+//
+// It exists so that a localised message can be chosen without touching the
+// sentinels, which are package-level singletons shared by every request and
+// goroutine and compared by identity in app.go — writing a per-request string
+// into one would be both a data race and a broken match.
+//
+// It is also how "this is the framework's generic message" is told apart from
+// "a handler wrote its own". ctx.NotFound(err) constructs a fresh
+// NotFoundError carrying the handler's own words, so pointer identity is
+// already gone by the time the message is rendered; comparing the text is
+// what is left, and it is enough.
+var defaultHTTPMessage = map[int]string{
+	http.StatusUnauthorized:        "Unauthorized",
+	http.StatusForbidden:           "Forbidden",
+	http.StatusNotFound:            "Not Found",
+	http.StatusBadRequest:          "Bad Request",
+	http.StatusMethodNotAllowed:    "Method Not Allowed",
+	419:                            "Page Expired",
+	http.StatusUnprocessableEntity: "Unprocessable Entity",
+	http.StatusInternalServerError: "Internal Server Error",
+}
+
 type HttpError interface {
 	GetHttpMessage() HttpMessage
 }

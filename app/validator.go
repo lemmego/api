@@ -42,13 +42,145 @@ type Validator struct {
 	// err holds the first failure from a rule that could not run, as opposed
 	// to a value that was invalid. See Check and Err.
 	err error
+
+	// t translates a rule's message key. nil means the embedded English in
+	// validation_messages.go, which is what a unit test and a project that has
+	// not registered a translator both get.
+	t Translator
+
+	// attributes gives a field a human label for :attribute, set per
+	// validator by Attributes.
+	attributes map[string]string
 }
 
-func NewValidator() *Validator {
-	return &Validator{
+// ValidatorOption configures a validator at construction.
+type ValidatorOption func(*Validator)
+
+// WithTranslator gives a validator the request's translator, so its messages
+// come out in the reader's language.
+//
+// ctx.Validator() passes this, which is the construction path every real
+// caller takes. A bare NewValidator() keeps working and reads in English.
+func WithTranslator(t Translator) ValidatorOption {
+	return func(v *Validator) { v.t = t }
+}
+
+func NewValidator(opts ...ValidatorOption) *Validator {
+	v := &Validator{
 		Errors:          make(map[string][]string),
 		activeURLConfig: defaultActiveURLConfig(),
 	}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
+}
+
+// Attributes gives this validator's fields human labels, which are what
+// :attribute renders as.
+//
+//	v.Attributes(map[string]string{"email": "Email address"})
+//
+// Chainable so it reads as part of a one-expression Validate.
+func (v *Validator) Attributes(names map[string]string) *Validator {
+	if v.attributes == nil {
+		v.attributes = make(map[string]string, len(names))
+	}
+	for field, label := range names {
+		v.attributes[field] = label
+	}
+	return v
+}
+
+// translate resolves a message key for a field.
+//
+// Rendered now rather than at response time, and the reason is the Inertia
+// path: ValidationError puts the rendered map in the session and redirects,
+// so a deferred {key, params} would have to survive gob with parameters of
+// arbitrary type — and an application's own Custom rule passing its own
+// struct would panic at session-write time, inside a redirect, on a
+// validation failure. Rendering here keeps shared.ValidationErrors exactly
+// what it was, which is what gives its four consumers a zero-line diff.
+//
+// The one cost is that the locale is the failing request's, not that of the
+// GET which renders the errors after Back(). That is why the negotiating
+// middleware persists a locale taken from a query parameter to the cookie;
+// the cookie and header sources are unaffected.
+func (v *Validator) translate(key, field string, params map[string]any) string {
+	repl := make(map[string]any, len(params)+1)
+	repl["attribute"] = v.attribute(field)
+	for name, value := range params {
+		repl[name] = value
+	}
+
+	if v.t != nil && v.t.Has(key) {
+		return v.t.Get(key, repl)
+	}
+	if pattern, ok := builtinMessages[key]; ok {
+		return interpolate(pattern, repl)
+	}
+	// Not a key the framework knows, so it is a message — which is what keeps
+	// Custom's and Check's existing signatures working.
+	return interpolate(key, repl)
+}
+
+// attribute returns a field's human label.
+//
+// Never empty, so no message can render with a hole in it where a field name
+// should be.
+func (v *Validator) attribute(field string) string {
+	if label, ok := v.attributes[field]; ok {
+		return label
+	}
+	if v.t != nil {
+		key := "validation.attributes." + field
+		if v.t.Has(key) {
+			return v.t.Get(key)
+		}
+		// A field inside ForEach is named "tags.0", so a catalogue cannot
+		// list every index. One more lookup with the indices collapsed.
+		if generic := collapseIndices(field); generic != field {
+			if key := "validation.attributes." + generic; v.t.Has(key) {
+				return v.t.Get(key)
+			}
+		}
+	}
+	return humaniseField(field)
+}
+
+// collapseIndices turns "tags.0.name" into "tags.*.name".
+func collapseIndices(field string) string {
+	parts := strings.Split(field, ".")
+	changed := false
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(part); err == nil {
+			parts[i] = "*"
+			changed = true
+		}
+	}
+	if !changed {
+		return field
+	}
+	return strings.Join(parts, ".")
+}
+
+// humaniseField is the last resort for :attribute: the field's own name, made
+// readable. It matches what api/db's rules already do, so the framework has
+// one convention rather than two.
+func humaniseField(field string) string {
+	readable := strings.ReplaceAll(field, "_", " ")
+	return strings.ReplaceAll(readable, ".", " ")
+}
+
+// fail records a failure against a field under a message key.
+//
+// rule is appended to "validation.", so a rule passes "required" or
+// "min.file".
+func (f *vField) fail(rule string, params map[string]any) {
+	f.vee.AddError(f.name, f.vee.translate("validation."+rule, f.name, params))
 }
 
 // ActiveURLConfig controls the network access performed by ActiveURL.
@@ -170,7 +302,7 @@ func (f *vField) Required() *vField {
 	}
 
 	if isZero {
-		f.vee.AddError(f.name, "This field is required")
+		f.fail("required", nil)
 	}
 	return f
 }
@@ -178,7 +310,7 @@ func (f *vField) Required() *vField {
 // Equals checks if the value is equal to the provided value
 func (f *vField) Equals(value any) *vField {
 	if f.value != value {
-		f.vee.AddError(f.name, "This field must match with the provided value")
+		f.fail("equals", nil)
 	}
 	return f
 }
@@ -187,7 +319,7 @@ func (f *vField) Equals(value any) *vField {
 func (f *vField) Min(min int) *vField {
 	if v, ok := f.value.(int); ok {
 		if v < min {
-			f.vee.AddError(f.name, "This field must be at least "+strconv.Itoa(min))
+			f.fail("min.numeric", map[string]any{"min": min})
 		}
 	}
 	return f
@@ -197,7 +329,7 @@ func (f *vField) Min(min int) *vField {
 func (f *vField) Max(max int) *vField {
 	if v, ok := f.value.(int); ok {
 		if v > max {
-			f.vee.AddError(f.name, "This field must not exceed "+strconv.Itoa(max))
+			f.fail("max.numeric", map[string]any{"max": max})
 		}
 	}
 	return f
@@ -207,7 +339,7 @@ func (f *vField) Max(max int) *vField {
 func (f *vField) Between(min, max int) *vField {
 	if v, ok := f.value.(int); ok {
 		if v < min || v > max {
-			f.vee.AddError(f.name, fmt.Sprintf("This field must be between %d and %d", min, max))
+			f.fail("between.numeric", map[string]any{"min": min, "max": max})
 		}
 	}
 	return f
@@ -218,7 +350,7 @@ func (f *vField) Email() *vField {
 	if v, ok := f.value.(string); ok {
 		emailRegex := regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
 		if !emailRegex.MatchString(v) {
-			f.vee.AddError(f.name, "This field must be a valid email address")
+			f.fail("email", nil)
 		}
 	}
 	return f
@@ -229,7 +361,7 @@ func (f *vField) Alpha() *vField {
 	if v, ok := f.value.(string); ok {
 		for _, char := range v {
 			if !unicode.IsLetter(char) {
-				f.vee.AddError(f.name, "This field must contain only alphabetic characters")
+				f.fail("alpha", nil)
 				break
 			}
 		}
@@ -242,7 +374,7 @@ func (f *vField) Numeric() *vField {
 	if v, ok := f.value.(string); ok {
 		for _, char := range v {
 			if !unicode.IsDigit(char) {
-				f.vee.AddError(f.name, "This field must contain only numeric characters")
+				f.fail("numeric", nil)
 				break
 			}
 		}
@@ -255,7 +387,7 @@ func (f *vField) AlphaNumeric() *vField {
 	if v, ok := f.value.(string); ok {
 		for _, char := range v {
 			if !unicode.IsLetter(char) && !unicode.IsDigit(char) {
-				f.vee.AddError(f.name, "This field must contain only alphanumeric characters")
+				f.fail("alpha_num", nil)
 				break
 			}
 		}
@@ -268,7 +400,7 @@ func (f *vField) Date(layout string) *vField {
 	if v, ok := f.value.(string); ok {
 		_, err := time.Parse(layout, v)
 		if err != nil {
-			f.vee.AddError(f.name, "This field must be a valid date in the format "+layout)
+			f.fail("date_format", map[string]any{"format": layout})
 		}
 	}
 	return f
@@ -282,7 +414,7 @@ func (f *vField) In(validValues []string) *vField {
 				return f
 			}
 		}
-		f.vee.AddError(f.name, "This field must be one of the following: "+strings.Join(validValues, ", "))
+		f.fail("in", map[string]any{"values": strings.Join(validValues, ", ")})
 	}
 	return f
 }
@@ -292,9 +424,9 @@ func (f *vField) Regex(pattern string) *vField {
 	if v, ok := f.value.(string); ok {
 		regex, err := regexp.Compile(pattern)
 		if err != nil {
-			f.vee.AddError(f.name, "Invalid regular expression pattern")
+			f.fail("regex_pattern_invalid", nil)
 		} else if !regex.MatchString(v) {
-			f.vee.AddError(f.name, "This field must match the pattern: "+pattern)
+			f.fail("regex", map[string]any{"pattern": pattern})
 		}
 	}
 	return f
@@ -305,7 +437,7 @@ func (f *vField) URL() *vField {
 	if v, ok := f.value.(string); ok {
 		_, err := url.ParseRequestURI(v)
 		if err != nil {
-			f.vee.AddError(f.name, "This field must be a valid URL")
+			f.fail("url", nil)
 		}
 	}
 	return f
@@ -316,7 +448,7 @@ func (f *vField) IP() *vField {
 	if v, ok := f.value.(string); ok {
 		ip := net.ParseIP(v)
 		if ip == nil {
-			f.vee.AddError(f.name, "This field must be a valid IP address")
+			f.fail("ip", nil)
 		}
 	}
 	return f
@@ -327,7 +459,7 @@ func (f *vField) UUID() *vField {
 	if v, ok := f.value.(string); ok {
 		_, err := uuid.Parse(v)
 		if err != nil {
-			f.vee.AddError(f.name, "This field must be a valid UUID")
+			f.fail("uuid", nil)
 		}
 	}
 	return f
@@ -341,15 +473,15 @@ func (f *vField) Boolean() *vField {
 	case string:
 		lowercaseValue := strings.ToLower(f.value.(string))
 		if lowercaseValue != "true" && lowercaseValue != "false" {
-			f.vee.AddError(f.name, "This field must be a boolean value")
+			f.fail("boolean", nil)
 		}
 	case int:
 		intValue := f.value.(int)
 		if intValue != 0 && intValue != 1 {
-			f.vee.AddError(f.name, "This field must be a boolean value")
+			f.fail("boolean", nil)
 		}
 	default:
-		f.vee.AddError(f.name, "This field must be a boolean value")
+		f.fail("boolean", nil)
 	}
 	return f
 }
@@ -359,7 +491,7 @@ func (f *vField) JSON() *vField {
 	if v, ok := f.value.(string); ok {
 		var js json.RawMessage
 		if json.Unmarshal([]byte(v), &js) != nil {
-			f.vee.AddError(f.name, "This field must be a valid JSON string")
+			f.fail("json", nil)
 		}
 	}
 	return f
@@ -369,7 +501,7 @@ func (f *vField) JSON() *vField {
 func (f *vField) AfterDate(afterDate time.Time) *vField {
 	if v, ok := f.value.(time.Time); ok {
 		if !v.After(afterDate) {
-			f.vee.AddError(f.name, "This field must be a date after "+afterDate.String())
+			f.fail("after", map[string]any{"date": afterDate.String()})
 		}
 	}
 	return f
@@ -379,7 +511,7 @@ func (f *vField) AfterDate(afterDate time.Time) *vField {
 func (f *vField) BeforeDate(beforeDate time.Time) *vField {
 	if v, ok := f.value.(time.Time); ok {
 		if !v.Before(beforeDate) {
-			f.vee.AddError(f.name, "This field must be a date before "+beforeDate.String())
+			f.fail("before", map[string]any{"date": beforeDate.String()})
 		}
 	}
 	return f
@@ -389,7 +521,7 @@ func (f *vField) BeforeDate(beforeDate time.Time) *vField {
 func (f *vField) StartsWith(prefix string) *vField {
 	if v, ok := f.value.(string); ok {
 		if !strings.HasPrefix(v, prefix) {
-			f.vee.AddError(f.name, "This field must start with "+prefix)
+			f.fail("starts_with", map[string]any{"value": prefix})
 		}
 	}
 	return f
@@ -399,7 +531,7 @@ func (f *vField) StartsWith(prefix string) *vField {
 func (f *vField) EndsWith(suffix string) *vField {
 	if v, ok := f.value.(string); ok {
 		if !strings.HasSuffix(v, suffix) {
-			f.vee.AddError(f.name, "This field must end with "+suffix)
+			f.fail("ends_with", map[string]any{"value": suffix})
 		}
 	}
 	return f
@@ -409,7 +541,7 @@ func (f *vField) EndsWith(suffix string) *vField {
 func (f *vField) Contains(substring string) *vField {
 	if v, ok := f.value.(string); ok {
 		if !strings.Contains(v, substring) {
-			f.vee.AddError(f.name, "This field must contain "+substring)
+			f.fail("contains", map[string]any{"value": substring})
 		}
 	}
 	return f
@@ -420,19 +552,19 @@ func (f *vField) Dimensions(width, height int) *vField {
 	if v, ok := f.value.(string); ok {
 		file, err := os.Open(v)
 		if err != nil {
-			f.vee.AddError(f.name, "Unable to open the file")
+			f.fail("file_unopenable", nil)
 			return f
 		}
 		defer file.Close()
 
 		img, _, err := image.DecodeConfig(file)
 		if err != nil {
-			f.vee.AddError(f.name, "Unable to decode the image")
+			f.fail("file_undecodable", nil)
 			return f
 		}
 
 		if img.Width != width || img.Height != height {
-			f.vee.AddError(f.name, fmt.Sprintf("Image dimensions must be %dx%d", width, height))
+			f.fail("dimensions", map[string]any{"width": width, "height": height})
 		}
 	}
 	return f
@@ -443,7 +575,7 @@ func (f *vField) MimeTypes(allowedTypes []string) *vField {
 	if v, ok := f.value.(string); ok {
 		file, err := os.Open(v)
 		if err != nil {
-			f.vee.AddError(f.name, "Unable to open the file")
+			f.fail("file_unopenable", nil)
 			return f
 		}
 		defer file.Close()
@@ -451,7 +583,7 @@ func (f *vField) MimeTypes(allowedTypes []string) *vField {
 		buffer := make([]byte, 512)
 		_, err = file.Read(buffer)
 		if err != nil && err != io.EOF {
-			f.vee.AddError(f.name, "Unable to read the file")
+			f.fail("file_unreadable", nil)
 			return f
 		}
 
@@ -463,7 +595,7 @@ func (f *vField) MimeTypes(allowedTypes []string) *vField {
 			}
 		}
 
-		f.vee.AddError(f.name, "File type must be one of: "+strings.Join(allowedTypes, ", "))
+		f.fail("file_type", map[string]any{"values": strings.Join(allowedTypes, ", ")})
 	}
 	return f
 }
@@ -473,7 +605,7 @@ func (f *vField) Timezone() *vField {
 	if v, ok := f.value.(string); ok {
 		_, err := time.LoadLocation(v)
 		if err != nil {
-			f.vee.AddError(f.name, "Invalid timezone")
+			f.fail("timezone", nil)
 		}
 	}
 	return f
@@ -485,12 +617,12 @@ func (f *vField) ActiveURL() *vField {
 		config := f.vee.activeURLConfig
 		target, err := url.ParseRequestURI(v)
 		if err != nil || target.Scheme != "http" && target.Scheme != "https" || target.Hostname() == "" {
-			f.vee.AddError(f.name, "The URL is not active or reachable")
+			f.fail("active_url", nil)
 			return f
 		}
 		if !config.AllowPrivateHosts {
 			if err := validateActiveURLHost(target, config.Timeout); err != nil {
-				f.vee.AddError(f.name, "The URL is not active or reachable")
+				f.fail("active_url", nil)
 				return f
 			}
 		}
@@ -510,20 +642,20 @@ func (f *vField) ActiveURL() *vField {
 		}
 		resp, err := client.Get(v)
 		if err != nil {
-			f.vee.AddError(f.name, "The URL is not active or reachable")
+			f.fail("active_url", nil)
 			return f
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			f.vee.AddError(f.name, "The URL returned a non-OK status")
+			f.fail("active_url_status", nil)
 			return f
 		}
 		bytesRead, err := io.Copy(io.Discard, io.LimitReader(resp.Body, config.MaxResponseBytes+1))
 		if err != nil {
-			f.vee.AddError(f.name, "The URL is not active or reachable")
+			f.fail("active_url", nil)
 		} else if bytesRead > config.MaxResponseBytes || resp.ContentLength > config.MaxResponseBytes {
-			f.vee.AddError(f.name, "The URL response is too large")
+			f.fail("active_url_too_large", nil)
 		}
 	}
 	return f
@@ -586,7 +718,7 @@ func (f *vField) AlphaDash() *vField {
 	if v, ok := f.value.(string); ok {
 		re := regexp.MustCompile("^[a-zA-Z0-9-_]+$")
 		if !re.MatchString(v) {
-			f.vee.AddError(f.name, "This field may only contain alpha-numeric characters, dashes, and underscores")
+			f.fail("alpha_dash", nil)
 		}
 	}
 	return f
@@ -597,7 +729,7 @@ func (f *vField) Ascii() *vField {
 	if v, ok := f.value.(string); ok {
 		for _, char := range v {
 			if char > unicode.MaxASCII {
-				f.vee.AddError(f.name, "This field may only contain ASCII characters")
+				f.fail("ascii", nil)
 				break
 			}
 		}
@@ -610,7 +742,7 @@ func (f *vField) MacAddress() *vField {
 	if v, ok := f.value.(string); ok {
 		_, err := net.ParseMAC(v)
 		if err != nil {
-			f.vee.AddError(f.name, "This field must be a valid MAC address")
+			f.fail("mac_address", nil)
 		}
 	}
 	return f
@@ -621,7 +753,7 @@ func (f *vField) ULID() *vField {
 	if v, ok := f.value.(string); ok {
 		re := regexp.MustCompile("^[0-9A-HJKMNP-TV-Z]{26}$")
 		if !re.MatchString(v) {
-			f.vee.AddError(f.name, "This field must be a valid ULID")
+			f.fail("ulid", nil)
 		}
 	}
 	return f
@@ -633,7 +765,7 @@ func (f *vField) Distinct() *vField {
 		seen := make(map[any]bool)
 		for _, value := range slice {
 			if seen[value] {
-				f.vee.AddError(f.name, "This field must contain only unique values")
+				f.fail("distinct", nil)
 				break
 			}
 			seen[value] = true
@@ -647,18 +779,18 @@ func (f *vField) Filled() *vField {
 	switch val := f.value.(type) {
 	case string:
 		if val == "" {
-			f.vee.AddError(f.name, "This field must be filled")
+			f.fail("filled", nil)
 		}
 	case []interface{}:
 		if len(val) == 0 {
-			f.vee.AddError(f.name, "This field must be filled")
+			f.fail("filled", nil)
 		}
 	case map[string]interface{}:
 		if len(val) == 0 {
-			f.vee.AddError(f.name, "This field must be filled")
+			f.fail("filled", nil)
 		}
 	case nil:
-		f.vee.AddError(f.name, "This field must be filled")
+		f.fail("filled", nil)
 	}
 	return f
 }
@@ -668,7 +800,7 @@ func (f *vField) HexColor() *vField {
 	if v, ok := f.value.(string); ok {
 		re := regexp.MustCompile("^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$")
 		if !re.MatchString(v) {
-			f.vee.AddError(f.name, "This field must be a valid hexadecimal color code")
+			f.fail("hex_color", nil)
 		}
 	}
 	return f
@@ -683,12 +815,12 @@ func (f *vField) ForEach(rules ...func(*vField) *vField) *vField {
 	}
 
 	if slice.Kind() != reflect.Slice && slice.Kind() != reflect.Array {
-		f.vee.AddError(f.name, "This field must be an array or slice")
+		f.fail("array", nil)
 		return f
 	}
 
 	if slice.Len() == 0 {
-		f.vee.AddError(f.name, "This field cannot be empty")
+		f.fail("array_empty", nil)
 		return f
 	}
 
@@ -707,7 +839,7 @@ func (f *vField) ForEach(rules ...func(*vField) *vField) *vField {
 // Custom allows defining a custom validation rule
 func (f *vField) Custom(validateFunc func(v interface{}) (bool, string)) *vField {
 	if isValid, errorMessage := validateFunc(f.value); !isValid {
-		f.vee.AddError(f.name, errorMessage)
+		f.vee.AddError(f.name, f.vee.translate(errorMessage, f.name, nil))
 	}
 	return f
 }
@@ -731,13 +863,13 @@ func (f *vField) Check(fn func(value any) (bool, string, error)) *vField {
 	if err != nil {
 		f.vee.setErr(err)
 		if message == "" {
-			message = "This field could not be validated"
+			message = "validation.check_failed"
 		}
-		f.vee.AddError(f.name, message)
+		f.vee.AddError(f.name, f.vee.translate(message, f.name, nil))
 		return f
 	}
 	if !ok {
-		f.vee.AddError(f.name, message)
+		f.vee.AddError(f.name, f.vee.translate(message, f.name, nil))
 	}
 	return f
 }
@@ -782,7 +914,7 @@ func (f *vField) MaxSize(max int64) *vField {
 	}
 	for _, header := range headers {
 		if header.Size > max {
-			f.uploadError(headers, header, fmt.Sprintf("This file is larger than %s", humanBytes(max)))
+			f.failUpload(headers, header, "max.file", map[string]any{"max": humanBytes(max)})
 		}
 	}
 	return f
@@ -797,7 +929,7 @@ func (f *vField) MinSize(min int64) *vField {
 	}
 	for _, header := range headers {
 		if header.Size < min {
-			f.uploadError(headers, header, fmt.Sprintf("This file is smaller than %s", humanBytes(min)))
+			f.failUpload(headers, header, "min.file", map[string]any{"min": humanBytes(min)})
 		}
 	}
 	return f
@@ -818,7 +950,7 @@ func (f *vField) FileTypes(types ...string) *vField {
 	for _, header := range headers {
 		detected, err := sniffUpload(header)
 		if err != nil {
-			f.uploadError(headers, header, "This file could not be read")
+			f.failUpload(headers, header, "upload_unreadable", nil)
 			continue
 		}
 		allowedType := slices.ContainsFunc(types, func(allowed string) bool {
@@ -827,7 +959,7 @@ func (f *vField) FileTypes(types ...string) *vField {
 			return strings.EqualFold(mediaType(detected), mediaType(allowed))
 		})
 		if !allowedType {
-			f.uploadError(headers, header, "This file must be one of: "+strings.Join(types, ", "))
+			f.failUpload(headers, header, "mimes", map[string]any{"values": strings.Join(types, ", ")})
 		}
 	}
 	return f
@@ -844,13 +976,13 @@ func (f *vField) Image() *vField {
 	for _, header := range headers {
 		file, err := header.Open()
 		if err != nil {
-			f.uploadError(headers, header, "This file could not be read")
+			f.failUpload(headers, header, "upload_unreadable", nil)
 			continue
 		}
 		_, _, err = image.DecodeConfig(file)
 		_ = file.Close()
 		if err != nil {
-			f.uploadError(headers, header, "This file is not an image")
+			f.failUpload(headers, header, "image", nil)
 		}
 	}
 	return f
@@ -866,22 +998,22 @@ func (f *vField) ImageDimensions(minWidth, minHeight, maxWidth, maxHeight int) *
 	for _, header := range headers {
 		file, err := header.Open()
 		if err != nil {
-			f.uploadError(headers, header, "This file could not be read")
+			f.failUpload(headers, header, "upload_unreadable", nil)
 			continue
 		}
 		config, _, err := image.DecodeConfig(file)
 		_ = file.Close()
 		if err != nil {
-			f.uploadError(headers, header, "This file is not an image")
+			f.failUpload(headers, header, "image", nil)
 			continue
 		}
 		switch {
 		case minWidth > 0 && config.Width < minWidth,
 			minHeight > 0 && config.Height < minHeight:
-			f.uploadError(headers, header, fmt.Sprintf("This image must be at least %dx%d pixels", minWidth, minHeight))
+			f.failUpload(headers, header, "image_dimensions.min", map[string]any{"width": minWidth, "height": minHeight})
 		case maxWidth > 0 && config.Width > maxWidth,
 			maxHeight > 0 && config.Height > maxHeight:
-			f.uploadError(headers, header, fmt.Sprintf("This image must be at most %dx%d pixels", maxWidth, maxHeight))
+			f.failUpload(headers, header, "image_dimensions.max", map[string]any{"width": maxWidth, "height": maxHeight})
 		}
 	}
 	return f
@@ -919,16 +1051,20 @@ func (f *vField) uploadHeaders() ([]*multipart.FileHeader, bool) {
 	return nil, false
 }
 
-// uploadError reports a failure against one file.
+// failUpload is fail for one file within a possibly multi-file field.
 //
-// The filename is prefixed only when the field holds more than one, because
-// then "This file is not an image" does not say which of four it is. For a
-// single upload the message is unchanged, and the filename is the client's
-// own string, so it is never the only thing a message says.
-func (f *vField) uploadError(headers []*multipart.FileHeader, header *multipart.FileHeader, message string) {
+// The separator and the ordering are a message key too, so a language that
+// puts the filename elsewhere can say so. The filename is the client's own
+// string, which is why the substituter must not rescan its output: a file
+// named ":message.txt" has to stay literal rather than being re-read as a
+// placeholder.
+func (f *vField) failUpload(headers []*multipart.FileHeader, header *multipart.FileHeader, rule string, params map[string]any) {
+	message := f.vee.translate("validation."+rule, f.name, params)
 	if len(headers) > 1 && header.Filename != "" {
-		f.vee.AddError(f.name, header.Filename+" — "+message)
-		return
+		message = f.vee.translate("validation.file_prefixed", f.name, map[string]any{
+			"file":    header.Filename,
+			"message": message,
+		})
 	}
 	f.vee.AddError(f.name, message)
 }

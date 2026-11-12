@@ -38,13 +38,23 @@ func TestTheCoreDoesNotLinkACloudSDK(t *testing.T) {
 		"go.opentelemetry.io/",
 		"google.golang.org/grpc",
 		"github.com/lemmego/fsys",
+		// lemmego/i18n and the CLDR tables it carries. api/app declares a
+		// two-method Translator interface instead, which *i18n.Translator
+		// satisfies structurally, so a project that never translates anything
+		// does not ship a few hundred kilobytes of plural and language data to
+		// run a validator. It also keeps the two modules from requiring each
+		// other, which is the cycle shape already on the list to break.
+		"golang.org/x/text/feature",
+		"golang.org/x/text/language",
+		"github.com/lemmego/i18n",
 	}
 
 	for _, dep := range deps {
 		for _, bad := range forbidden {
 			if strings.Contains(dep, bad) {
 				t.Errorf("api/app links %s — the storage drivers belong in "+
-					"api/fs, reached through api/providers/fs", dep)
+					"api/fs, reached through api/providers/fs, and the translator "+
+					"in i18n/provider", dep)
 			}
 		}
 	}

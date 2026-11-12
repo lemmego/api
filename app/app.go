@@ -637,7 +637,11 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 
 			var httpErr HttpError
 			if errors.As(err, &httpErr) {
-				ctx.Error(httpErr.GetHttpMessage().Status, errors.New(httpErr.GetHttpMessage().Message))
+				// The one place a standard HTTP message is rendered, and so
+				// the one place it can be localised. The sentinels themselves
+				// are never touched: see defaultHTTPMessage.
+				message := httpErr.GetHttpMessage()
+				ctx.Error(message.Status, errors.New(ctx.translateHTTP(message)))
 				return
 			}
 

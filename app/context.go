@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,16 @@ type RequestResponseResolver interface {
 type RequestBodyValidator interface {
 	Validate(body req.Validator) error
 	Validator() *Validator
+}
+
+// Translating is the request's access to messages in the reader's language.
+//
+// T returns nil when no translator is registered, which every caller in the
+// framework treats as "fall back to the embedded English" rather than as an
+// error — an application without i18n is a valid application.
+type Translating interface {
+	T() Translator
+	Locale() string
 }
 
 type InputDecoder interface {
@@ -199,6 +210,7 @@ type HttpProvider interface {
 	InputDecoder
 	BodyParser
 	RequestBodyValidator
+	Translating
 	HeaderGetSetter
 	AcceptHeaderResolver
 	RequestGetSetter
@@ -282,7 +294,61 @@ func (c *ctx) Cookie(name string) *http.Cookie {
 }
 
 func (c *ctx) Validator() *Validator {
-	return NewValidator()
+	return NewValidator(WithTranslator(c.T()))
+}
+
+// T returns the request's translator.
+//
+// The per-request, locale-bound one when a translating middleware has set
+// one; the container's otherwise; and nil when no provider is registered at
+// all — which the validator reads as "use the embedded English", so an
+// application without i18n behaves exactly as it did before there was any.
+func (c *ctx) T() Translator {
+	if t, ok := c.Get(translatorKey).(Translator); ok && t != nil {
+		return t
+	}
+	// Lookup rather than Get: an application with no translator is a valid
+	// application, and Get panics on an unregistered service.
+	//
+	// And guarded on the application being there at all, because a context
+	// can be built without one — api/res's own render tests do exactly that,
+	// and found this by crashing.
+	if a := c.App(); a != nil {
+		if l, ok := Lookup[Localizer](a); ok && l != nil {
+			return l
+		}
+	}
+	return nil
+}
+
+// translateHTTP localises one of the standard HTTP messages.
+//
+// Keyed by status rather than by the sentinel, because the sentinels are
+// shared singletons — see defaultHTTPMessage. Only the framework's own
+// generic text is replaced: a handler that answered NotFound with "No such
+// invoice" said something specific, and a generic "Not Found" would throw it
+// away.
+func (c *ctx) translateHTTP(m HttpMessage) string {
+	if m.Message != defaultHTTPMessage[m.Status] {
+		return m.Message
+	}
+	key := "http." + strconv.Itoa(m.Status)
+	if t := c.T(); t != nil && t.Has(key) {
+		return t.Get(key)
+	}
+	if text, ok := builtinMessages[key]; ok {
+		return text
+	}
+	return m.Message
+}
+
+// Locale returns the request's locale, or "" when nothing is translating.
+func (c *ctx) Locale() string {
+	type locales interface{ Locale() string }
+	if l, ok := c.T().(locales); ok {
+		return l.Locale()
+	}
+	return ""
 }
 
 func (c *ctx) Validate(body req.Validator) error {

@@ -100,6 +100,33 @@ func (t *Template) Render(w io.Writer) error {
 			perRender["csrf"] = func() template.HTML { return field }
 		}
 	}
+
+	// t and choice, bound to this request's locale.
+	//
+	// Registered unconditionally and falling back to the key, for the same
+	// reason csrf above is: a template function that exists in one
+	// configuration and not another fails at parse time, which takes the whole
+	// page down rather than losing one string. With no translator registered
+	// these answer with the framework's own English, which is what every
+	// template that does not mention a locale already gets.
+	perRender["t"] = func(key string, pairs ...any) string { return key }
+	perRender["choice"] = func(key string, n int, pairs ...any) string { return key }
+	if t.ctx != nil {
+		if translator := t.ctx.T(); translator != nil {
+			perRender["t"] = func(key string, pairs ...any) string {
+				return translator.Get(key, templateReplacements(pairs))
+			}
+			type chooser interface {
+				Choice(key string, n int, repl ...map[string]any) string
+			}
+			if c, ok := translator.(chooser); ok {
+				perRender["choice"] = func(key string, n int, pairs ...any) string {
+					return c.Choice(key, n, templateReplacements(pairs))
+				}
+			}
+		}
+	}
+
 	for name, fn := range t.funcMap {
 		perRender[name] = fn
 	}
@@ -246,4 +273,26 @@ func findTemplates(dir, pattern, root string) ([]string, error) {
 		dir = parent
 	}
 	return templates, nil
+}
+
+// templateReplacements turns a template's trailing key/value pairs into a
+// replacement set, so a template reads:
+//
+//	{{ t "mail.hello" "name" .User.Name }}
+//
+// html/template cannot build a map inline, which is why the pairs are flat.
+// An odd trailing argument is dropped rather than panicking mid-render: a
+// page missing one substitution is better than a page that does not render,
+// and the unreplaced :name stays visible to say so.
+func templateReplacements(pairs []any) map[string]any {
+	if len(pairs) < 2 {
+		return nil
+	}
+	repl := make(map[string]any, len(pairs)/2)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if name, ok := pairs[i].(string); ok {
+			repl[name] = pairs[i+1]
+		}
+	}
+	return repl
 }

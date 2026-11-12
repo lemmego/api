@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"github.com/lemmego/api/app"
 	"testing"
 )
 
@@ -87,8 +88,41 @@ func TestQuoteIdentifierPerDialect(t *testing.T) {
 	}
 }
 
-func TestHumanise(t *testing.T) {
-	if got := humanise("email_address"); got != "email address" {
-		t.Errorf("humanise = %q", got)
+// TestTheRulesReturnKeysTheValidatorCanResolve replaces a test of humanise,
+// which these two rules were the only callers of.
+//
+// They used to build their own English — "This " + humanise(column) + " is
+// already taken" — from the *column* name. They return a message key now, and
+// the validator binds :attribute from the *field* name, which is the one the
+// reader is looking at and only coincidentally the same string.
+//
+// The keys have to exist in the framework's own English or they would render
+// as themselves, which is what this asserts.
+func TestTheRulesReturnKeysTheValidatorCanResolve(t *testing.T) {
+	builtin := app.BuiltinValidationMessages()
+	for _, key := range []string{
+		"validation.unique",
+		"validation.exists",
+		"validation.uncheckable",
+	} {
+		text, ok := builtin[key]
+		if !ok {
+			t.Errorf("%s is not in the framework's own English, so it would reach a "+
+				"reader as the raw key", key)
+			continue
+		}
+		if text == "" {
+			t.Errorf("%s is empty", key)
+		}
+	}
+
+	// And the rules really do return those keys rather than prose.
+	rule := Unique(nil, "users", "email")
+	_, message, err := rule("someone@example.com")
+	if err == nil {
+		t.Fatal("Unique with no connection should report that it could not check")
+	}
+	if message != "validation.uncheckable" {
+		t.Errorf("message = %q, want the key", message)
 	}
 }
