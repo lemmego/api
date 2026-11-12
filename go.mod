@@ -10,7 +10,7 @@ require (
 	github.com/alexedwards/scs/redisstore v0.0.0-20240316134038-7e11d57e8885
 	github.com/alexedwards/scs/sqlite3store v0.0.0-20251002162104-209de6e426de
 	github.com/alexedwards/scs/v2 v2.8.0
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-chi/chi/v5 v5.5.0
 	github.com/go-chi/httplog/v2 v2.1.1
 	github.com/gomodule/redigo v1.9.2
 	github.com/google/uuid v1.6.0
@@ -21,11 +21,11 @@ require (
 	github.com/manifoldco/promptui v0.9.0
 	github.com/romsar/gonertia/v3 v3.0.0
 	github.com/spf13/cobra v1.8.1
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.59.0
 )
 
 require (
-	filippo.io/edwards25519 v1.1.0 // indirect
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gertd/go-pluralize v0.2.1 // indirect
@@ -40,7 +40,7 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	modernc.org/libc v1.68.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
