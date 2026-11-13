@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/lemmego/api/shared"
@@ -315,34 +316,132 @@ func (f *vField) Equals(value any) *vField {
 	return f
 }
 
-// Min checks if the value is greater than or equal to the minimum
+// Min requires a value to be at least min.
+//
+// What that measures depends on the value: a number is compared, a string is
+// counted in characters, and a slice, array or map is counted in items. The
+// message says which — "at least 8" for a number, "at least 8 characters"
+// for a string, "at least 8 items" for a collection.
 func (f *vField) Min(min int) *vField {
-	if v, ok := f.value.(int); ok {
-		if v < min {
-			f.fail("min.numeric", map[string]any{"min": min})
-		}
+	size, kind, ok := f.measure()
+	if !ok || size >= float64(min) {
+		return f
+	}
+	params := map[string]any{"min": min}
+	// Spelled out rather than "min."+kind, because TestEveryKeyARuleUsesExists
+	// parses this file and checks each key against the catalogue — and it can
+	// only do that for a literal. A concatenated key compiles, renders as the
+	// raw key when it is wrong, and is exactly what that guard exists to
+	// catch; it refused this file when the key was built at runtime.
+	switch kind {
+	case sizeString:
+		f.fail("min.string", params)
+	case sizeCollection:
+		f.fail("min.array", params)
+	default:
+		f.fail("min.numeric", params)
 	}
 	return f
 }
 
-// Max checks if the value is less than or equal to the maximum
+// Max requires a value to be at most max, measuring it the way Min does.
 func (f *vField) Max(max int) *vField {
-	if v, ok := f.value.(int); ok {
-		if v > max {
-			f.fail("max.numeric", map[string]any{"max": max})
-		}
+	size, kind, ok := f.measure()
+	if !ok || size <= float64(max) {
+		return f
+	}
+	params := map[string]any{"max": max}
+	switch kind {
+	case sizeString:
+		f.fail("max.string", params)
+	case sizeCollection:
+		f.fail("max.array", params)
+	default:
+		f.fail("max.numeric", params)
 	}
 	return f
 }
 
-// Between checks if the value is between min and max (inclusive)
+// Between requires a value to be within min and max inclusive, measuring it
+// the way Min does.
 func (f *vField) Between(min, max int) *vField {
-	if v, ok := f.value.(int); ok {
-		if v < min || v > max {
-			f.fail("between.numeric", map[string]any{"min": min, "max": max})
-		}
+	size, kind, ok := f.measure()
+	if !ok || (size >= float64(min) && size <= float64(max)) {
+		return f
+	}
+	params := map[string]any{"min": min, "max": max}
+	switch kind {
+	case sizeString:
+		f.fail("between.string", params)
+	case sizeCollection:
+		f.fail("between.array", params)
+	default:
+		f.fail("between.numeric", params)
 	}
 	return f
+}
+
+// sizeKind says which of the three size messages describes a value.
+type sizeKind int
+
+const (
+	sizeNumber sizeKind = iota
+	sizeString
+	sizeCollection
+)
+
+// measure reduces a value to the number the size rules compare, and says which
+// message describes it.
+//
+// All three rules used to open with `if v, ok := f.value.(int); ok`, which
+// meant they silently did nothing to anything else — and the thing people
+// most often apply them to is a string. Every scaffolded project's
+// `v.Field("password", i.Password).Required().Min(8)` enforced no minimum at
+// all, and a `Max(255)` on a name enforced no maximum, with nothing anywhere
+// to say so. The .string and .array message variants have existed in the
+// catalogue since it was written; nothing emitted them.
+//
+// A string is counted in **characters, not bytes**, and the difference is
+// security-relevant rather than cosmetic: a byte count is larger than a rune
+// count for any non-ASCII text, so byte-counting would let the four-character
+// password "密码密码" satisfy Min(8) at twelve bytes. Counting runes matches
+// what a person means by "eight characters" and is what Laravel's mb_strlen
+// does.
+//
+// Every numeric kind is measured, not just int. A body bound from JSON
+// arrives as float64, so an int-only assertion was a second silent no-op in
+// the same three rules.
+//
+// One level of pointer is followed, because an optional input field is
+// usually a *string and a nil one is simply absent — Required is the rule
+// that has an opinion about that.
+//
+// A value that is none of these — a bool, a struct, a time — is not
+// measurable and the rule does not apply. It deliberately does not panic:
+// for a field typed `any`, the dynamic type comes from the request, so a
+// panic here would be a 500 that a client could choose to cause.
+func (f *vField) measure() (size float64, kind sizeKind, ok bool) {
+	value := reflect.ValueOf(f.value)
+	if value.Kind() == reflect.Ptr {
+		if value.IsNil() {
+			return 0, sizeNumber, false
+		}
+		value = value.Elem()
+	}
+
+	switch value.Kind() {
+	case reflect.String:
+		return float64(utf8.RuneCountInString(value.String())), sizeString, true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(value.Int()), sizeNumber, true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return float64(value.Uint()), sizeNumber, true
+	case reflect.Float32, reflect.Float64:
+		return value.Float(), sizeNumber, true
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return float64(value.Len()), sizeCollection, true
+	}
+	return 0, sizeNumber, false
 }
 
 // Email checks if the value is a valid email address
