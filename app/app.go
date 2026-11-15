@@ -585,7 +585,7 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 		app.activeRequests.Add(1)
 		defer app.activeRequests.Done()
 
-		slog.Debug("Handling request for route: %s %s", "method", route.Method, "path", route.Path)
+		slog.Debug("Handling request for route", "method", route.Method, "path", route.Path)
 		if route.router == nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return

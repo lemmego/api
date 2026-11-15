@@ -40,6 +40,7 @@ const (
 	EnvDaily    = "LOG_DAILY"
 	EnvSource   = "LOG_SOURCE"
 	EnvQuiet    = "LOG_QUIET"
+	EnvSplit    = "LOG_SPLIT_STREAMS"
 )
 
 // Provider configures slog from the environment and installs it as the
@@ -243,6 +244,24 @@ func (p *Provider) resolve(a app.App, env *environment) log.Options {
 	// process asks for its own voice back.
 	if !opts.Quiet {
 		opts.Quiet = env.boolean(EnvQuiet, a.RunningInConsole())
+	}
+
+	// Divide the console between the two streams for a server, and leave a
+	// CLI command's logs wholly on stderr.
+	//
+	// The reason is the platform rather than the logger: Railway, Cloud Run
+	// and Heroku all classify a line by the stream it arrived on, so a server
+	// that writes info to stderr has every routine line recorded as an error
+	// and severity filtering stops meaning anything — precisely when somebody
+	// is hunting a real error. A CLI command has the opposite need, since
+	// stdout is the output somebody ran it for.
+	//
+	// LOG_SPLIT_STREAMS overrides it, for the case LOG_QUIET above already
+	// describes: a worker or a scheduler is a long-running server that
+	// happens to be spelled as a subcommand, so RunningInConsole answers the
+	// wrong question for it.
+	if !opts.SplitStreams {
+		opts.SplitStreams = env.boolean(EnvSplit, !a.RunningInConsole())
 	}
 
 	return opts

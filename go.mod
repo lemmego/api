@@ -16,7 +16,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lemmego/fsys v0.2.0
-	github.com/lemmego/log v0.1.0
+	github.com/lemmego/log v0.3.0
 	github.com/lemmego/migration v0.2.0
 	github.com/manifoldco/promptui v0.9.0
 	github.com/romsar/gonertia/v3 v3.0.0
