@@ -591,17 +591,6 @@ func makeHandlerFunc(app *application, route *route) http.HandlerFunc {
 			return
 		}
 
-		// Lookup, not Get: an application without session.Provider is a valid
-		// configuration — a pure JSON API has no cookie jar — and Get panics
-		// on an unregistered service, so this took the process down on every
-		// single request rather than serving the API it was configured for.
-		if sess, ok := Lookup[*session.Session](app); ok && sess != nil {
-			if token := sess.Token(r.Context()); token != "" {
-				r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
-				slog.Debug("Current session ID: ", "sessionID", token)
-			}
-		}
-
 		allHandlers := append(append([]Handler{}, route.BeforeMiddleware...), route.Handlers...)
 		allHandlers = append(allHandlers, route.AfterMiddleware...)
 
@@ -686,9 +675,37 @@ func (a *application) serveHandler() http.Handler {
 	// down at boot with "service *session.Session is not registered" rather
 	// than serving the API it was configured to serve. Hence Lookup.
 	if sess, ok := Lookup[*session.Session](a); ok && sess != nil {
-		return sess.LoadAndSave(a.router)
+		return sess.LoadAndSave(withSessionID(sess, a.router))
 	}
 	return a.router
+}
+
+// withSessionID puts the current session's id on the request context.
+//
+// Inside LoadAndSave, so scs has already loaded the session, and outside the
+// router, so every HTTP middleware the router runs can see it. That placement
+// is the whole point: this used to happen in the route dispatcher instead,
+// which is inside the mux — so an HTTPMiddleware had already run and returned
+// before the value existed, and anything installed with Router().Use that
+// keyed on a session read nothing on every request.
+//
+// lemmego/inertia is what paid for it. Its flash provider keys on this value
+// and gonertia restores flash data from its own middleware, which lemmego
+// installs with Router().Use — so a message flashed on a redirect was stored
+// under the session that set it and read back with no session at all. Writing
+// worked; reading never did.
+//
+// A brand-new session still has no token here, because scs mints one when it
+// commits. That is correct rather than a remaining hole: a visitor with no
+// session has no per-session state to find.
+func withSessionID(sess *session.Session, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token := sess.Token(r.Context()); token != "" {
+			r = r.WithContext(context.WithValue(r.Context(), "sessionID", token))
+			slog.Debug("Current session ID: ", "sessionID", token)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Handler boots the application and returns the handler Run would serve,
