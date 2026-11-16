@@ -51,8 +51,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
-github.com/lemmego/fsys v0.2.0 h1:J/1lJlxcFzBxoGUfOvzfdoQ+XhTM+slEisAL3xeOzXY=
-github.com/lemmego/fsys v0.2.0/go.mod h1:RB4TpgjbfJRPIUFWGagOIVSyLnFa4MRWXil+fRS17CE=
+github.com/lemmego/fsys v0.2.1 h1:sDKl+OvJgRwpkTAsfaqhqcAeKTtsSTfSqyMdpdWkiJg=
+github.com/lemmego/fsys v0.2.1/go.mod h1:15a6VDQ1+H+Qje7u3sWaBP2Q5OHiIXFvR0HQ+5EMdpo=
 github.com/lemmego/log v0.3.0 h1:MG96doA7j0u6gihmYLs6XEBTxiDpxf+5ShP+yUQkXeg=
 github.com/lemmego/log v0.3.0/go.mod h1:cWrLm0KDeQ69+4XmafOaqkE+3Bt7MuwqftuutHqqtTs=
 github.com/lemmego/migration v0.6.0 h1:t5DZl0+VzOkiw783SHaBkPr2+lunktOtnF86uen0gBU=

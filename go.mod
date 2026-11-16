@@ -15,7 +15,7 @@ require (
 	github.com/gomodule/redigo v1.9.2
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/lemmego/fsys v0.2.0
+	github.com/lemmego/fsys v0.2.1
 	github.com/lemmego/log v0.3.0
 	github.com/lemmego/migration v0.6.0
 	github.com/manifoldco/promptui v0.9.0
