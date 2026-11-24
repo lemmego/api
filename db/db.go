@@ -97,7 +97,13 @@ func Register(a app.App, c Connection) bool {
 // the name. An unrecognised name yields DialectUnknown.
 func ParseDialect(driver string) (Dialect, bool) {
 	switch strings.ToLower(strings.TrimSpace(driver)) {
-	case "sqlite", "sqlite3":
+	case "sqlite", "sqlite3", "libsql":
+		// libSQL is a fork of SQLite, so its SQL, its placeholders and its
+		// DDL are SQLite's — which is all a Dialect describes. Where it
+		// differs is capability: its Go driver refuses a read-only
+		// transaction, and that belongs on orm.Dialect (orm.LibSQL()), not
+		// here. A separate Dialect const would make every consumer that
+		// already handles SQLite correctly refuse it for no reason.
 		return SQLite, true
 	case "mysql", "mariadb":
 		return MySQL, true
