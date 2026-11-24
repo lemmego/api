@@ -296,3 +296,49 @@ func TestActiveURLLimitsRedirects(t *testing.T) {
 		t.Fatal("redirect loop should fail")
 	}
 }
+
+// The email rule accepts addresses that exist.
+//
+// Two classes were refused, and both are ordinary rather than exotic. An
+// address with a capital letter — the first letter of somebody's own name —
+// failed because the pattern was [a-z] with no case flag. And every gTLD
+// longer than four characters failed because the final label was bounded at
+// {2,4}, which predates the 2013 expansion: .online, .email, .agency,
+// .security and several hundred more.
+//
+// The rejections are kept in the same test, so a fix that widens the
+// pattern into accepting anything fails here rather than passing quietly.
+func TestTheEmailRuleAcceptsAddressesThatExist(t *testing.T) {
+	accepted := []string{
+		"user@example.com",
+		"Ada@Example.com",       // a capital letter
+		"ADA@EXAMPLE.COM",       // shouted
+		"cole@echoapp.online",   // a six-character TLD
+		"ops@maritect.security", // an eight-character TLD
+		"first.last+tag@sub.domain.co",
+	}
+	for _, address := range accepted {
+		v := NewValidator()
+		v.Field("email", address).Email()
+		if !v.IsValid() {
+			t.Errorf("%q was refused", address)
+		}
+	}
+
+	refused := []string{
+		"invalid",
+		"no-at-sign.example.com",
+		"two@@example.com",
+		"trailing@example.",
+		"@example.com",
+		"spaces in@example.com",
+		"short@example.c", // a one-character final label
+	}
+	for _, address := range refused {
+		v := NewValidator()
+		v.Field("email", address).Email()
+		if v.IsValid() {
+			t.Errorf("%q was accepted and should not be", address)
+		}
+	}
+}

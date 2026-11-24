@@ -445,10 +445,26 @@ func (f *vField) measure() (size float64, kind sizeKind, ok bool) {
 }
 
 // Email checks if the value is a valid email address
+// emailPattern is deliberately permissive about two things the old one was
+// not, because both rejected addresses that exist.
+//
+// Case: an address is not case-sensitive in its domain and conventionally
+// not in its local part either, so [a-z] refused "Ada@Example.com" as
+// malformed. Somebody who capitalises the first letter of their own name
+// could not register.
+//
+// Length of the final label: {2,4} predates the 2013 gTLD expansion and
+// rejects .online, .email, .agency, .security and several hundred others —
+// including, in this repository's own history, the address of the person
+// who wrote it. The bound is 2 to 63, which is the DNS label limit.
+//
+// It is still a shape check rather than a parser: the only thing that
+// proves an address exists is sending something to it.
+var emailPattern = regexp.MustCompile(`(?i)^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,63}$`)
+
 func (f *vField) Email() *vField {
 	if v, ok := f.value.(string); ok {
-		emailRegex := regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
-		if !emailRegex.MatchString(v) {
+		if !emailPattern.MatchString(v) {
 			f.fail("email", nil)
 		}
 	}
