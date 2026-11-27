@@ -7,9 +7,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+type uploadRecordingDisk struct {
+	Disk
+	filename string
+}
+
+func (d *uploadRecordingDisk) Upload(_ multipart.File, header *multipart.FileHeader, _ string) (*os.File, error) {
+	d.filename = header.Filename
+	return os.CreateTemp("", "upload-test-*")
+}
+
+type uploadTestFileSystem struct{ disk Disk }
+
+func (f uploadTestFileSystem) Disk(...string) (Disk, error) { return f.disk, nil }
 
 func multipartRequest(t *testing.T, filename string, contents []byte) *http.Request {
 	t.Helper()
@@ -56,6 +71,60 @@ func TestFormFileClosesAndCleansOwnedMultipartFileOnce(t *testing.T) {
 	}
 	if _, err := os.Stat(name); !os.IsNotExist(err) {
 		t.Fatalf("expected multipart temp file to be removed, stat error: %v", err)
+	}
+}
+
+func TestUploadWithoutFilenameUsesSafeNameDerivedFromContent(t *testing.T) {
+	const clientFilename = "payload.php"
+	request := multipartRequest(t, clientFilename, []byte("\x89PNG\r\n\x1a\ncontent"))
+	a := Configure()
+	disk := &uploadRecordingDisk{}
+	if !RegisterIfAbsent[FileSystem](a, uploadTestFileSystem{disk: disk}) {
+		t.Fatal("could not register the recording filesystem")
+	}
+	c := NewContext(a, httptest.NewRecorder(), request)
+
+	storedFile, err := c.Upload("file", "avatars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = storedFile.Close()
+		_ = os.Remove(storedFile.Name())
+	})
+
+	if disk.filename == clientFilename {
+		t.Fatalf("Upload used client filename %q as the stored filename", disk.filename)
+	}
+	if filepath.Base(disk.filename) != disk.filename {
+		t.Fatalf("stored filename %q contains a path component", disk.filename)
+	}
+	if got := filepath.Ext(disk.filename); got != ".png" {
+		t.Fatalf("stored filename %q has extension %q, want extension derived from PNG content", disk.filename, got)
+	}
+}
+
+func TestUploadWithoutFilenameAllowsEmptyContentWithSafeName(t *testing.T) {
+	const clientFilename = "empty.txt"
+	request := multipartRequest(t, clientFilename, nil)
+	a := Configure()
+	disk := &uploadRecordingDisk{}
+	if !RegisterIfAbsent[FileSystem](a, uploadTestFileSystem{disk: disk}) {
+		t.Fatal("could not register the recording filesystem")
+	}
+	c := NewContext(a, httptest.NewRecorder(), request)
+
+	storedFile, err := c.Upload("file", "avatars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = storedFile.Close()
+		_ = os.Remove(storedFile.Name())
+	})
+
+	if disk.filename == "" || disk.filename == clientFilename {
+		t.Fatalf("empty upload stored filename = %q, want a non-empty server-generated name", disk.filename)
 	}
 }
 

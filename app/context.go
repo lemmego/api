@@ -5,7 +5,9 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/gob"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -19,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -185,8 +188,13 @@ type Downloader interface {
 }
 
 type Uploader interface {
+	// Upload stores a multipart file from a form field. When filename is omitted
+	// or empty, the stored name is random and its suffix comes from the detected
+	// content type. A supplied filename must be chosen by the server, never copied
+	// from the client's multipart header.
 	Upload(uploadedFileName string, dir string, filename ...string) (*os.File, error)
-	// UploadOn is Upload against a named disk.
+	// UploadOn is Upload against a named disk. Its optional filename follows the
+	// same server-selected filename contract as Upload.
 	//
 	// It exists because "which disk" is a decision per upload, not per
 	// application: an avatar belongs on a disk that is served over HTTP and a
@@ -750,8 +758,13 @@ func (c *ctx) UploadOn(disk string, uploadedFileName string, dir string, filenam
 			}
 		}()
 
-		if len(filename) > 0 {
+		if len(filename) > 0 && filename[0] != "" {
 			header.Filename = filename[0]
+		} else {
+			header.Filename, err = generatedUploadFilename(header)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		fss, err := c.disk(disk)
@@ -766,6 +779,44 @@ func (c *ctx) UploadOn(disk string, uploadedFileName string, dir string, filenam
 		return nil, fmt.Errorf("could not get form file: %w", err)
 	}
 	return nil, errors.New("file with the provided uploadedFileName does not exist")
+}
+
+// generatedUploadFilename keeps client-controlled names out of storage paths.
+// The random basename also avoids collisions between uploads with the same
+// original name; the suffix, when one is known, comes from sniffed content.
+func generatedUploadFilename(header *multipart.FileHeader) (string, error) {
+	contentType, err := sniffUpload(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("could not identify uploaded file type: %w", err)
+	}
+
+	extension := ""
+	if err == nil {
+		extensions, _ := mime.ExtensionsByType(mediaType(contentType))
+		sort.Strings(extensions)
+		for _, candidate := range extensions {
+			if len(candidate) < 2 || len(candidate) > 16 || candidate[0] != '.' {
+				continue
+			}
+			safe := true
+			for _, r := range candidate[1:] {
+				if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+					safe = false
+					break
+				}
+			}
+			if safe {
+				extension = candidate
+				break
+			}
+		}
+	}
+
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return "", fmt.Errorf("could not generate uploaded file name: %w", err)
+	}
+	return hex.EncodeToString(random) + extension, nil
 }
 
 // StoreUpload writes an already-opened upload to the configured disk.
